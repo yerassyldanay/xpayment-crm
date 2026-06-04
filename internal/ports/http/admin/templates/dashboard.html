@@ -1,0 +1,35 @@
+{{define "title"}}Dashboard{{end}}
+{{define "content"}}
+<h1>Dashboard</h1>
+<section class="cards">
+  <div class="card">
+    <h3>Published</h3>
+    {{if .Published}}<p>version <strong>{{.Published.Version}}</strong><br><small>{{.Published.PublishedAt}}</small></p>
+    {{else}}<p class="muted">none yet</p>{{end}}
+  </div>
+  <div class="card">
+    <h3>Draft</h3>
+    {{if .Draft}}<p>unpublished changes in draft v{{.Draft.Version}}</p>{{else}}<p class="muted">no pending draft</p>{{end}}
+  </div>
+</section>
+
+<form method="post" action="/admin/publish" onsubmit="return confirm('Validate and publish the draft?')">
+  <button class="primary" {{if not .Draft}}disabled{{end}}>Validate &amp; Publish draft</button>
+</form>
+
+<h2>Version history</h2>
+<table>
+  <thead><tr><th>Version</th><th>Status</th><th>Published</th><th></th></tr></thead>
+  <tbody>
+  {{range .Versions}}
+    <tr>
+      <td>{{.Version}}</td><td><span class="badge {{.Status}}">{{.Status}}</span></td><td>{{.PublishedAt}}</td>
+      <td>{{if ne .Status "published"}}
+        <form method="post" action="/admin/rollback" onsubmit="return confirm('Re-publish version {{.Version}}?')">
+          <input type="hidden" name="version" value="{{.Version}}"><button>Rollback to this</button>
+        </form>{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

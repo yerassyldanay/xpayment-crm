@@ -1,0 +1,51 @@
+{{define "title"}}Media{{end}}
+{{define "content"}}
+<h1>Media catalog</h1>
+<p class="muted">The <code>description</code> is written <strong>for the model</strong> — it's the selection menu entry.</p>
+<table>
+  <thead><tr><th>Ref</th><th>Kind</th><th>Topic</th><th>URL</th><th>Active</th><th></th></tr></thead>
+  <tbody>
+  {{range .Assets}}
+    <tr>
+      <td>{{.Ref}}</td><td>{{.Kind}}</td><td>{{.TopicSlug}}</td>
+      <td><a href="{{.URL}}" target="_blank">{{.URL}}</a></td><td>{{if .Active}}✓{{end}}</td>
+      <td>
+        <a href="/admin/assets?edit={{.ID}}">edit</a>
+        <form method="post" action="/admin/assets/delete" onsubmit="return confirm('Delete asset?')">
+          <input type="hidden" name="id" value="{{.ID}}"><button class="link">delete</button>
+        </form>
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+
+<h2>Upload a file</h2>
+<form method="post" action="/admin/assets/upload" enctype="multipart/form-data">
+  <input type="file" name="file" required>
+  <button>Upload to media dir</button>
+  <small class="muted">Copies into MEDIA_DIR and gives you a /media/... URL to paste below.</small>
+</form>
+
+<h2>{{if .Edit.ID}}Edit asset{{else}}Add asset{{end}}</h2>
+<form method="post" action="/admin/assets">
+  <input type="hidden" name="id" value="{{.Edit.ID}}">
+  <div class="row">
+    <label>Ref<input name="ref" value="{{.Edit.Ref}}" required></label>
+    <label>Kind
+      <select name="kind">
+        {{range .Kinds}}<option value="{{.}}" {{if eq . $.Edit.Kind}}selected{{end}}>{{.}}</option>{{end}}
+      </select></label>
+    <label>Language
+      <select name="language">
+        {{range .Langs}}<option value="{{.}}" {{if eq . $.Edit.Language}}selected{{end}}>{{.}}</option>{{end}}
+      </select></label>
+    <label>Active<input type="checkbox" name="active" {{if .Edit.Active}}checked{{end}}></label>
+  </div>
+  <label>Topic slug<input name="topic_slug" value="{{.Edit.TopicSlug}}"></label>
+  <label>URL<input name="url" value="{{.Edit.URL}}" required></label>
+  <label>Title<input name="title" value="{{.Edit.Title}}"></label>
+  <label>Description (for the model)<textarea name="description" rows="3" required>{{.Edit.Description}}</textarea></label>
+  <button class="primary">Save asset</button>
+</form>
+{{end}}

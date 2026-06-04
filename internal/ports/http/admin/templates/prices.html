@@ -1,0 +1,43 @@
+{{define "title"}}Prices{{end}}
+{{define "content"}}
+<h1>Prices — the single source of numbers</h1>
+<p class="muted">The model never sees these. Go renders <code>{{"{{price.growth}}"}}</code> / <code>{{"{{limit.growth}}"}}</code> after the model.</p>
+
+<h2>Tariffs</h2>
+<table>
+  <thead><tr><th>Key</th><th>Price (tenge)</th><th>Cashier limit</th><th></th></tr></thead>
+  <tbody>
+  {{range .Tariffs}}
+    <tr>
+      <td>{{.Key}}</td><td>{{.PriceTenge}}</td><td>{{.CashierLimit}}</td>
+      <td><form method="post" action="/admin/prices/tariff/delete" onsubmit="return confirm('Delete tariff?')">
+        <input type="hidden" name="key" value="{{.Key}}"><button class="link">delete</button></form></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+<form method="post" action="/admin/prices/tariff" class="row">
+  <label>Key<input name="key" required></label>
+  <label>Price (tenge)<input name="price_tenge" type="number" required></label>
+  <label>Cashier limit<input name="cashier_limit" type="number" required></label>
+  <button>Save tariff</button>
+</form>
+
+<h2>Placeholders</h2>
+<table>
+  <thead><tr><th>Token</th><th>RU</th><th>KK</th><th></th></tr></thead>
+  <tbody>
+  {{range .Placeholders}}
+    <tr><td>{{.Token}}</td><td>{{.ValueRU}}</td><td>{{.ValueKK}}</td>
+      <td><form method="post" action="/admin/prices/placeholder/delete" onsubmit="return confirm('Delete?')">
+        <input type="hidden" name="token" value="{{.Token}}"><button class="link">delete</button></form></td></tr>
+  {{end}}
+  </tbody>
+</table>
+<form method="post" action="/admin/prices/placeholder" class="row">
+  <label>Token<input name="token" placeholder="support.phone" required></label>
+  <label>RU<input name="value_ru" required></label>
+  <label>KK<input name="value_kk" required></label>
+  <button>Save placeholder</button>
+</form>
+{{end}}

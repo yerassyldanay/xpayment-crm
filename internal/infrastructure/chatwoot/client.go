@@ -1,0 +1,202 @@
+// Package chatwoot is the REST adapter for the hub (docs/06 · Chatwoot contracts).
+// Auth header is api_access_token. Paths verify against your deployed version.
+package chatwoot
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/yessaliyev/xpayment-crm/internal/domain"
+)
+
+// Client implements assistant.ChatwootReader and assistant.ChatwootWriter.
+type Client struct {
+	httpc      *http.Client
+	base       string // {CHATWOOT_BASE_URL}/api/v1/accounts/{account_id}
+	token      string
+	windowSize int
+}
+
+// New builds the client. windowSize caps the messages read (~15).
+func New(baseURL, accountID, token string) *Client {
+	return &Client{
+		httpc:      &http.Client{Timeout: 20 * time.Second},
+		base:       fmt.Sprintf("%s/api/v1/accounts/%s", baseURL, accountID),
+		token:      token,
+		windowSize: 15,
+	}
+}
+
+func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
+	var rdr io.Reader
+	if body != nil {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		rdr = bytes.NewReader(buf)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rdr)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("api_access_token", c.token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.httpc.Do(req)
+	if err != nil {
+		return fmt.Errorf("chatwoot %s %s: %w", method, path, err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("chatwoot %s %s: http %d: %s", method, path, resp.StatusCode, string(data))
+	}
+	if out != nil && len(data) > 0 {
+		if err := json.Unmarshal(data, out); err != nil {
+			return fmt.Errorf("chatwoot decode %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// --- ChatwootReader ---
+
+type messagesResp struct {
+	Payload []struct {
+		ID          int64  `json:"id"`
+		Content     string `json:"content"`
+		MessageType int    `json:"message_type"` // 0 incoming, 1 outgoing
+		Private     bool   `json:"private"`
+		CreatedAt   int64  `json:"created_at"`
+	} `json:"payload"`
+}
+
+// Window reads the conversation's recent messages, dropping private notes and
+// keeping only customer (incoming) and human-agent (outgoing) turns, newest ~15.
+func (c *Client) Window(ctx context.Context, chatID domain.ChatID) ([]domain.Message, error) {
+	var mr messagesResp
+	path := fmt.Sprintf("/conversations/%d/messages", chatID.ConversationID)
+	if err := c.do(ctx, http.MethodGet, path, nil, &mr); err != nil {
+		return nil, err
+	}
+	out := make([]domain.Message, 0, len(mr.Payload))
+	for _, m := range mr.Payload {
+		if m.Private || m.Content == "" {
+			continue
+		}
+		role := domain.RoleAgent
+		if m.MessageType == 0 {
+			role = domain.RoleCustomer
+		} else if m.MessageType != 1 {
+			continue // skip activity/template messages
+		}
+		out = append(out, domain.Message{
+			ID:        strconv.FormatInt(m.ID, 10),
+			Role:      role,
+			Content:   m.Content,
+			CreatedAt: time.Unix(m.CreatedAt, 0),
+		})
+	}
+	// Keep the most recent windowSize, in chronological order.
+	if len(out) > c.windowSize {
+		out = out[len(out)-c.windowSize:]
+	}
+	return out, nil
+}
+
+type contactResp struct {
+	Payload struct {
+		CustomAttributes map[string]any `json:"custom_attributes"`
+	} `json:"payload"`
+}
+
+// Profile reads the contact's custom attributes (Decision 9).
+func (c *Client) Profile(ctx context.Context, chatID domain.ChatID) (map[string]any, error) {
+	var cr contactResp
+	path := fmt.Sprintf("/contacts/%d", chatID.ContactID)
+	if err := c.do(ctx, http.MethodGet, path, nil, &cr); err != nil {
+		return nil, err
+	}
+	if cr.Payload.CustomAttributes == nil {
+		return map[string]any{}, nil
+	}
+	return cr.Payload.CustomAttributes, nil
+}
+
+// --- ChatwootWriter ---
+
+// PostPrivateNote posts the draft as an internal note Evolution never forwards.
+func (c *Client) PostPrivateNote(ctx context.Context, chatID domain.ChatID, text string) error {
+	path := fmt.Sprintf("/conversations/%d/messages", chatID.ConversationID)
+	body := map[string]any{"content": text, "message_type": "outgoing", "private": true}
+	return c.do(ctx, http.MethodPost, path, body, nil)
+}
+
+// MergeContactAttributes is a read-modify-write: GET current attrs, additively
+// merge (never null a known field), then PUT (the PUT replaces the whole object).
+func (c *Client) MergeContactAttributes(ctx context.Context, chatID domain.ChatID, attrs map[string]any) error {
+	if len(attrs) == 0 {
+		return nil
+	}
+	current, err := c.Profile(ctx, chatID)
+	if err != nil {
+		return err
+	}
+	merged := make(map[string]any, len(current)+len(attrs))
+	for k, v := range current {
+		merged[k] = v
+	}
+	for k, v := range attrs {
+		if v == nil {
+			continue // never null a known field (Decision 9)
+		}
+		merged[k] = v
+	}
+	path := fmt.Sprintf("/contacts/%d", chatID.ContactID)
+	return c.do(ctx, http.MethodPut, path, map[string]any{"custom_attributes": merged}, nil)
+}
+
+type labelsResp struct {
+	Payload []string `json:"payload"`
+}
+
+// SetLabels reads existing labels and POSTs the union (the API sets the full list).
+func (c *Client) SetLabels(ctx context.Context, chatID domain.ChatID, labels []string) error {
+	if len(labels) == 0 {
+		return nil
+	}
+	var lr labelsResp
+	path := fmt.Sprintf("/conversations/%d/labels", chatID.ConversationID)
+	if err := c.do(ctx, http.MethodGet, path, nil, &lr); err != nil {
+		return err
+	}
+	set := make(map[string]bool, len(lr.Payload)+len(labels))
+	union := make([]string, 0, len(lr.Payload)+len(labels))
+	for _, l := range append(lr.Payload, labels...) {
+		if l == "" || set[l] {
+			continue
+		}
+		set[l] = true
+		union = append(union, l)
+	}
+	return c.do(ctx, http.MethodPost, path, map[string]any{"labels": union}, nil)
+}
+
+// SendOutgoing creates a real outgoing message (Phase 3 auto-send only). Still
+// through Chatwoot, never Evolution (Decision 6).
+func (c *Client) SendOutgoing(ctx context.Context, chatID domain.ChatID, text string, media []domain.ResolvedAsset) error {
+	for _, m := range media {
+		text += "\n" + m.URL
+	}
+	path := fmt.Sprintf("/conversations/%d/messages", chatID.ConversationID)
+	body := map[string]any{"content": text, "message_type": "outgoing", "private": false}
+	return c.do(ctx, http.MethodPost, path, body, nil)
+}

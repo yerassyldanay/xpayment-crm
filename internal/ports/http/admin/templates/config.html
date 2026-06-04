@@ -1,0 +1,18 @@
+{{define "title"}}Persona{{end}}
+{{define "content"}}
+<h1>Persona &amp; guardrails</h1>
+<p class="muted">Edits save to the <strong>draft</strong>. Publish from the Dashboard to go live.</p>
+<form method="post" action="/admin/config">
+  <label>Persona (identity, tone)
+    <textarea name="persona" rows="5" required>{{.Form.Persona}}</textarea></label>
+  <label>Mission
+    <textarea name="mission" rows="2">{{.Form.Mission}}</textarea></label>
+  <label>Guardrails (one per line)
+    <textarea name="guardrails" rows="7" required>{{.Form.Guardrails}}</textarea></label>
+  <label>Language policy
+    <textarea name="language_policy" rows="2">{{.Form.LanguagePolicy}}</textarea></label>
+  <label>Reply max words
+    <input name="reply_max_words" type="number" value="{{.Form.ReplyMaxWords}}"></label>
+  <button class="primary">Save draft</button>
+</form>
+{{end}}
