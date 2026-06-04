@@ -90,12 +90,12 @@ The unit tests prove *mechanics*; the golden set proves *answer quality* on **re
 }
 ```
 
-**Runner** — a Go test behind a build tag (`//go:build eval`) so it never runs in the normal `go test ./...` (it needs `ANTHROPIC_API_KEY` and costs tokens). For each case it calls `HandleMessage` with a **real Drafter** (live LLM, low temperature) + a stub `ChatwootReader` returning the case's `window`/`profile` + a `Snapshot` built from the working content repo, then scores:
+**Runner** — a Go test behind a build tag (`//go:build eval`) so it never runs in the normal `go test ./...` (it needs `LLM_API_KEY` and costs tokens). For each case it calls `HandleMessage` with a **real Drafter** (live LLM, low temperature) + a stub `ChatwootReader` returning the case's `window`/`profile` + a `Snapshot` built from the **draft** config, then scores:
 
 - **Deterministic metrics (exact / set-precision):** `asset_refs` precision & recall vs expected; `escalate` match; **price-safety** (no model numeral, no leftover token); language match; `answer_must_include/exclude` substring checks.
 - **Prose quality (LLM-as-judge):** a separate judge call scores the reply against a rubric (accuracy vs KB, tone, concision, no invented facts) on a 1–5 scale.
 
-**Report & gate** — emit a per-metric scorecard; **publishing** (merge to `main` in `xpayment-content` — [08](08-admin-ui.md#the-lifecycle-maps-onto-git)) is gated on the suite meeting thresholds (e.g. media-precision ≥ 0.9, price-safety = 1.0, judge-mean ≥ 4.0), run as content-repo CI. Media-selection precision is scored **separately** — attaching the wrong pricing image is a correctness failure, not a style nit.
+**Report & gate** — emit a per-metric scorecard; an **admin publish** ([08](08-admin-ui.md#the-config-lifecycle-draft--publish--rollback)) is gated on the suite meeting thresholds (e.g. media-precision ≥ 0.9, price-safety = 1.0, judge-mean ≥ 4.0). Media-selection precision is scored **separately** — attaching the wrong pricing image is a correctness failure, not a style nit.
 
 **Nondeterminism** — pin the model, use low temperature, judge with a fixed rubric, and assert **ranges/thresholds not equality** on prose. For a flaky case, run N times and require k-of-N. Keep the golden set in git so changes are reviewable.
 
@@ -117,7 +117,7 @@ jobs:
       - run: go test ./...                # unit + content loader/validator (no DB)
       - run: docker build .               # the Dockerfile builds
 ```
-**Evals are not in the brain's PR CI** (they need a live key + cost). Run them **nightly or manually**, and as the **publish gate** on `xpayment-content`: a PR to `main` runs snapshot-validation + the golden set before merge.
+**Evals are not in the brain's PR CI** (they need a live key + cost). Run them **nightly or manually**, and as the **publish gate**: before an admin publish, the service runs snapshot-validation + the golden set.
 
 ---
 
@@ -136,4 +136,4 @@ jobs:
 - **Eval thresholds** — the exact pass bars (media-precision, judge-mean, price-safety) and k-of-N for flaky cases.
 - **Judge model** — same model as drafting, or a different one, for the LLM-as-judge.
 - **Golden-set size & refresh** — how many cases, and how often re-mined as conversations accumulate.
-- **Content-repo CI** — wire snapshot-validation + the golden set as a required PR check on `xpayment-content` before merge-to-`main` (publish).
+- **Publish gate** — wire snapshot-validation + the golden set to run (and block) before an admin publish.

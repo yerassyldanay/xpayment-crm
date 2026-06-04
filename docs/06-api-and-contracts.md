@@ -8,7 +8,7 @@ The brain's own HTTP surface, plus the **exact Chatwoot calls** the adapter make
 
 ## Brain HTTP surface
 
-Two HTTP endpoints, both **server-to-server**: the **Chatwoot webhook receiver** (Chatwoot → brain) and the **GitHub reload webhook** (content repo → brain). There is **no admin API** — config is edited in `xpayment-content` via git (Decision 12; [08](08-admin-ui.md)). Generate the spec with `swag` like the main repo (`make swagger`).
+One port carries everything ([04](04-service-and-deployment.md)): the **Chatwoot webhook receiver**, the **admin UI** ([08](08-admin-ui.md)) under `/admin/*`, and uploaded media under `/media/*`. Generate the webhook spec with `swag`; the admin is server-rendered HTML, not a JSON API.
 
 ### Webhook receiver
 
@@ -18,29 +18,28 @@ POST /v1/assistant/webhook/chatwoot
 
 - **Auth:** verify `CHATWOOT_WEBHOOK_SECRET` before any work. *(Verify the mechanism: some Chatwoot versions sign payloads; if yours does not, require the secret as a header or an unguessable path segment — see [01 · webhooks](01-infrastructure.md#3-brain--chatwoot).)*
 - **Body:** the Chatwoot `message_created` event ([below](#the-message_created-payload)).
-- **Behavior:** classify → if it is an **incoming, non-private** message on the configured inbox, run `HandleMessage`; otherwise ignore. Return **`200` quickly** so Chatwoot does not retry on latency; at ~100 leads the LLM call can run inline within the request, but keep the handler idempotent on the Chatwoot message id (de-dupe redelivery).
-- **Response:** `200 {"status":"ok"}` always (even on ignore), so Chatwoot marks delivery successful. Log failures; do not 500 on a recoverable LLM error (post an escalation note instead — [02 · post-processing](02-assistant-brain.md#post-processing-pipeline)).
+- **Behavior:** classify → if it is an **incoming, non-private** message on the configured inbox, run `HandleMessage`; otherwise ignore. Return **`200` quickly**; at ~100 leads the LLM call can run inline within the request.
+- **Idempotency:** record the Chatwoot `message_id` in the `processed_messages` table ([03](03-content-and-data.md#schema-ddl)) and skip duplicates — this **survives restarts** (the file-only model couldn't). A duplicate that still slips through produces at most a duplicate *private note*, which is harmless because a human reviews before sending.
+- **Concurrency:** serialize processing **per contact** (a keyed mutex / tiny per-contact queue) so two near-simultaneous messages don't both read-merge-write the profile and clobber each other ([02 · post-processing](02-assistant-brain.md#post-processing-pipeline)).
+- **Response:** `200 {"status":"ok"}` always (even on ignore); never 500 on a recoverable LLM error (post an escalation note instead).
 
-### GitHub reload webhook
+### Admin UI & media (same port)
 
-```
-POST /v1/assistant/reload
-```
+`/admin/*` is the **server-rendered admin** ([08](08-admin-ui.md)) where config/KB is edited; **publish hot-reloads the snapshot in-process** — there is **no reload webhook**. `/media/*` serves uploaded binaries from `MEDIA_DIR` (public read). `/admin` is session-gated and must be behind TLS + an IP allowlist ([08 · auth](08-admin-ui.md#auth-same-service-login)).
 
-- **Auth:** verify `RELOAD_WEBHOOK_SECRET` (GitHub's `X-Hub-Signature-256` HMAC over the body).
-- **Trigger:** a push to `xpayment-content`'s `main` ([08 · reload](08-admin-ui.md#reload-on-change)).
-- **Behavior:** `git pull` the content checkout → build a new `Snapshot` → **validate** ([03 · validate on load](03-content-and-data.md#validate-on-load-fail-loudly)) → atomically swap **only if valid**; on failure keep the old snapshot and log (never serve a broken config). A local `--reload` signal and a slow poll are also supported.
-- **Response:** `200 {"reloaded": true, "commit": "<sha>"}` or `200 {"reloaded": false, "error": "…"}`.
+### The LLM call (outbound → OpenRouter)
 
-### Playground (CLI, not HTTP)
+The `Drafter` calls **OpenRouter** (OpenAI-compatible `POST /chat/completions`) using the `LLM_*` config (Decision 13). The full request/response and the structured-output (function-calling) contract are in [10 · the LLM call](10-prompt-and-examples.md#the-llm-call-openrouter).
 
-Config changes are tested with the **Playground CLI**, which builds a snapshot from the **working copy** (including uncommitted edits) and runs `HandleMessage` with a mockable LLM + Chatwoot — see [08 · Playground CLI](08-admin-ui.md#playground-cli--test-before-you-commit). Its output mirrors the post-processed `Draft` ([02 · the contract](02-assistant-brain.md#the-contract)) plus debug fields:
+### Playground (in the admin UI)
+
+Config is tested in the **admin Playground** ([08](08-admin-ui.md#playground-test-before-you-publish)) — a dry-run of `HandleMessage` against the **draft** snapshot; nothing is sent. Its result mirrors the post-processed `Draft` ([02 · the contract](02-assistant-brain.md#the-contract)) plus debug fields:
 
 ```json
 {
   "reply_text": "На тарифе «Рост» можно подключить до 5 касс, стоимость — 19 900 ₸ …",
   "reply_language": "ru",
-  "media": [{"ref": "add_cashier_video", "kind": "screen_recording", "url": "https://…"}],
+  "media": [{"ref": "add_cashier_video_kk", "kind": "screen_recording", "url": "https://…"}],
   "profile_patch": {"interested_tariff": "growth"},
   "suggested_status": "qualifying",
   "confidence": 0.82,

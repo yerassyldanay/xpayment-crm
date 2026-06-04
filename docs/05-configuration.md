@@ -1,30 +1,24 @@
 # 05 · Configuration
 
-This file is the **canonical home for every environment variable** the brain reads (just as [03-content-and-data.md](03-content-and-data.md) is the home for the content-repo file shapes). Other docs reference these names and never restate the catalog. Decision context is in [README.md](README.md); how config is consumed at boot is in [04-service-and-deployment.md](04-service-and-deployment.md).
+The **canonical home for every environment variable** the brain reads (just as [03-content-and-data.md](03-content-and-data.md) is the home for the data schema). Other docs reference these names and never restate the catalog. Decision context is in [README.md](README.md); how config is consumed at boot is in [04-service-and-deployment.md](04-service-and-deployment.md).
+
+> **Naming rule (Decision 13):** the LLM is reached via **OpenRouter**, but env vars are **provider-neutral** — `LLM_*`, never `OPENROUTER_*` / `OPENAI_*` / `ANTHROPIC_*`. Swapping provider/model is a config change.
 
 ## Loading pattern
 
-Copy `xpayment/internal/infrastructure/config/config.go`:
-
-- A single `Config` struct composed of nested structs (`Chatwoot`, `Anthropic`, `Content`, `OTel`, …).
-- A `getEnv(key, fallback)` helper that trims and falls back to a default; **required** values are validated at startup and the service refuses to boot if missing.
-- `loadDotEnv(".env")` at startup, with the file split:
-  - **`.env`** — local dev, contains secrets, **gitignored**.
-  - **`.env.example`** — committed template, every key present with placeholder/empty values.
-  - **`.env.remote`** — committed production overrides, **no secrets** (injected by the host/orchestrator).
-
-The brain has **no database** (Decision 2) — there is no `DATABASE_URL`. Its persona/KB/prices/media come from the content repo (the `Content` group below).
+Mirror `xpayment/internal/infrastructure/config/config.go`: one `Config` struct of nested structs, a `getEnv(key, fallback)` helper (required values validated at boot — refuse to start if missing), and a `.env` / `.env.example` / `.env.remote` split (`.env` holds secrets and is gitignored; `.env.example` lists every key).
 
 ```go
-// shape only — see xpayment/internal/infrastructure/config/config.go
 type Config struct {
-    Env       string        // APP_ENV
-    LogLevel  string        // LOG_LEVEL
-    HTTPAddr  string        // HTTP_ADDR
-    Chatwoot  ChatwootConfig
-    Anthropic AnthropicConfig
-    Content   ContentConfig
-    OTel      OTelConfig
+    Env      string        // APP_ENV
+    LogLevel string        // LOG_LEVEL
+    HTTPAddr string        // HTTP_ADDR  (one port: webhook + /admin + /media)
+    DBPath   string        // DB_PATH    (embedded SQLite file)
+    LLM      LLMConfig     // OpenRouter, provider-neutral
+    Chatwoot ChatwootConfig
+    Admin    AdminConfig
+    Media    MediaConfig
+    OTel     OTelConfig
 }
 ```
 
@@ -34,62 +28,73 @@ Legend — **Req?**: ✅ required (no safe default), ⚙️ has a default, 🔒 
 
 ### Runtime / HTTP
 
-| Variable | Default | Req? | Struct field | Note |
-|---|---|---|---|---|
-| `APP_ENV` | `prod` | ⚙️ | `Env` | `dev`\|`stage`\|`prod`; invalid → `prod`. |
-| `LOG_LEVEL` | `info` | ⚙️ | `LogLevel` | `debug`\|`info`\|`warn`\|`error`. |
-| `HTTP_ADDR` | `:8080` | ⚙️ | `HTTPAddr` | Listen address. Matches `EXPOSE 8080` ([04](04-service-and-deployment.md#dockerfile)). |
-| `METRICS_TOKEN` | `` (off) | ⚙️🔒 | `MetricsToken` | If set, `GET /metrics` requires `Authorization: Bearer <token>`. |
+| Variable | Default | Req? | Note |
+|---|---|---|---|
+| `APP_ENV` | `prod` | ⚙️ | `dev`\|`stage`\|`prod`. |
+| `LOG_LEVEL` | `info` | ⚙️ | `debug`\|`info`\|`warn`\|`error`. |
+| `HTTP_ADDR` | `:8080` | ⚙️ | The **one public port** — webhook + `/admin` + `/media`. |
+| `METRICS_TOKEN` | `` (off) | ⚙️🔒 | If set, `GET /metrics` requires `Authorization: Bearer <token>`. |
 
-*(No `ALLOWED_ORIGINS`/CORS in v1 — the only HTTP endpoints are server-to-server webhooks; there is no browser-facing admin API.)*
+### Store
+
+| Variable | Default | Req? | Note |
+|---|---|---|---|
+| `DB_PATH` | `./data/brain.db` | ⚙️ | Embedded SQLite file (config/KB/prices/media-meta + dedup). Put on a persistent volume in prod. |
+
+### LLM (OpenRouter, provider-neutral — Decision 13, [10](10-prompt-and-examples.md))
+
+| Variable | Default | Req? | Note |
+|---|---|---|---|
+| `LLM_API_KEY` | — | ✅🔒 | The OpenRouter API key (named neutrally). |
+| `LLM_BASE_URL` | `https://openrouter.ai/api/v1` | ⚙️ | OpenAI-compatible base URL; swappable to any compatible gateway. |
+| `LLM_MODEL` | `anthropic/claude-sonnet-4` | ⚙️ | An **OpenRouter model id**. Bump to a stronger model for quality or a cheaper one for cost — config only. |
+| `LLM_MAX_TOKENS` | `1024` | ⚙️ | Cap on draft output (drafts are ≤~120 words, [02](02-assistant-brain.md)). |
+| `LLM_TEMPERATURE` | `0.3` | ⚙️ | Low for consistent drafting. |
+
+> **Compliance gate.** Setting `LLM_API_KEY` means customer conversation text is sent to OpenRouter (and its upstream model provider) abroad. Confirm this is permitted under Kazakhstan's personal-data law before production — tracked in [09 · open-questions](09-product-and-ops.md). The choice of `LLM_MODEL` also decides *which* provider receives the data.
 
 ### Chatwoot (the hub — [01](01-infrastructure.md), [06](06-api-and-contracts.md))
 
-| Variable | Default | Req? | Struct field | Note |
-|---|---|---|---|---|
-| `CHATWOOT_BASE_URL` | — | ✅ | `Chatwoot.BaseURL` | e.g. `https://chat.xpayment.kz`. |
-| `CHATWOOT_ACCOUNT_ID` | — | ✅ | `Chatwoot.AccountID` | Numeric account the inbox lives in. |
-| `CHATWOOT_API_TOKEN` | — | ✅🔒 | `Chatwoot.APIToken` | Agent/bot token for REST write-back (`api_access_token` header). |
-| `CHATWOOT_INBOX_ID` | — | ✅ | `Chatwoot.InboxID` | The WhatsApp/API inbox the brain serves. |
-| `CHATWOOT_WEBHOOK_SECRET` | — | ✅🔒 | `Chatwoot.WebhookSecret` | Verifies inbound account-webhook calls ([06](06-api-and-contracts.md)). |
+| Variable | Default | Req? | Note |
+|---|---|---|---|
+| `CHATWOOT_BASE_URL` | — | ✅ | e.g. `https://chat.xpayment.kz`. |
+| `CHATWOOT_ACCOUNT_ID` | — | ✅ | Numeric account. |
+| `CHATWOOT_API_TOKEN` | — | ✅🔒 | Agent/bot token for REST write-back (`api_access_token` header). |
+| `CHATWOOT_INBOX_ID` | — | ✅ | The WhatsApp/API inbox the brain serves. |
+| `CHATWOOT_WEBHOOK_SECRET` | — | ✅🔒 | Verifies inbound account-webhook calls ([06](06-api-and-contracts.md)). |
 
-### Anthropic (the LLM — [02](02-assistant-brain.md))
+### Admin UI ([08](08-admin-ui.md))
 
-| Variable | Default | Req? | Struct field | Note |
-|---|---|---|---|---|
-| `ANTHROPIC_API_KEY` | — | ✅🔒 | `Anthropic.APIKey` | |
-| `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | ⚙️ | `Anthropic.Model` | Sonnet is the cost/quality default for drafting; bump to `claude-opus-4-8` for quality or `claude-haiku-4-5-20251001` for cost. |
-| `ANTHROPIC_MAX_TOKENS` | `1024` | ⚙️ | `Anthropic.MaxTokens` | Drafts are ≤~120 words ([02](02-assistant-brain.md)); cap output. |
+| Variable | Default | Req? | Note |
+|---|---|---|---|
+| `ADMIN_USER` | `admin` | ⚙️ | Login for `/admin`. |
+| `ADMIN_PASSWORD` | — | ✅🔒 | Stored/compared as a hash; set a strong value (admin is on the public port). |
+| `SESSION_SECRET` | — | ✅🔒 | Signs the admin session cookie. |
 
-> **Compliance gate.** Setting `ANTHROPIC_API_KEY` means customer conversation text is sent to Anthropic. Confirm this is permitted under Kazakhstan's personal-data law before production — tracked in [09 · open-questions](09-product-and-ops.md).
+### Media ([03 · Media](03-content-and-data.md#media))
 
-### Content repo (the config source — Decision 2; [03](03-content-and-data.md), [08](08-admin-ui.md))
-
-| Variable | Default | Req? | Struct field | Note |
-|---|---|---|---|---|
-| `CONTENT_REPO_PATH` | `./xpayment-content` | ✅ | `Content.Path` | Local checkout the brain loads the snapshot from. |
-| `CONTENT_REPO_URL` | `` | ⚙️ | `Content.RepoURL` | If set, the brain `git clone`/`pull`s this on boot and reload. |
-| `CONTENT_REPO_BRANCH` | `main` | ⚙️ | `Content.Branch` | Branch to track (publish = merge here). |
-| `KB_MEDIA_BASE_URL` | — | ✅ | `Content.MediaBaseURL` | Static base that `media.json` `file` paths resolve against (Git LFS / object storage / served `media/`). |
-| `RELOAD_WEBHOOK_SECRET` | — | ✅🔒 | `Content.ReloadSecret` | Verifies the GitHub push webhook that triggers reload ([06](06-api-and-contracts.md#github-reload-webhook)). |
+| Variable | Default | Req? | Note |
+|---|---|---|---|
+| `MEDIA_DIR` | `./data/media` | ⚙️ | Local dir the binary serves at `/media/...` (uploads land here). Persistent volume in prod. |
+| `MEDIA_BASE_URL` | `` (= app base) | ⚙️ | Absolute base for `kb_assets.url`; leave empty to use the app's own `/media`. Set to an object-store/CDN base for video. |
 
 ### Observability (OTel — [04](04-service-and-deployment.md#observability))
 
-| Variable | Default | Req? | Struct field | Note |
-|---|---|---|---|---|
-| `OTEL_ENABLED` | `false` | ⚙️ | `OTel.Enabled` | When false, a no-op tracer is installed. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` | ⚙️ | `OTel.Endpoint` | OTLP HTTP → Jaeger. |
-| `OTEL_SERVICE_NAME` | `xpayment-copilot` | ⚙️ | `OTel.ServiceName` | Distinguish from the main `xpayment` service. |
-| `OTEL_SAMPLE_RATE` | `1.0` | ⚙️ | `OTel.SampleRate` | `0.0`–`1.0`. |
+| Variable | Default | Req? | Note |
+|---|---|---|---|
+| `OTEL_ENABLED` | `false` | ⚙️ | No-op tracer when false. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` | ⚙️ | OTLP HTTP → Jaeger. |
+| `OTEL_SERVICE_NAME` | `xpayment-crm` | ⚙️ | |
+| `OTEL_SAMPLE_RATE` | `1.0` | ⚙️ | `0.0`–`1.0`. |
 
 ## Secrets handling
 
-- **Secret (🔒):** `ANTHROPIC_API_KEY`, `CHATWOOT_API_TOKEN`, `CHATWOOT_WEBHOOK_SECRET`, `RELOAD_WEBHOOK_SECRET`, `METRICS_TOKEN`.
-- Keep them only in the gitignored `.env` (dev) or injected by the host/secret manager (prod). Never in `.env.example` or `.env.remote`.
-- `.env.example` must list **every** key above with empty/placeholder values so a new engineer sees the full surface at a glance.
+- **Secret (🔒):** `LLM_API_KEY`, `CHATWOOT_API_TOKEN`, `CHATWOOT_WEBHOOK_SECRET`, `ADMIN_PASSWORD`, `SESSION_SECRET`, `METRICS_TOKEN`.
+- Keep them only in the gitignored `.env` (dev) or injected by the host/secret manager (prod). Never in `.env.example`/`.env.remote`.
+- `.env.example` lists **every** key with empty/placeholder values.
 
 ## Open questions
 
-- **Content delivery** — mount the content repo as a read-only volume vs. `git clone` on boot ([04](04-service-and-deployment.md#content-checkout--reload)).
-- **Media storage** — Git LFS vs object storage for video; `KB_MEDIA_BASE_URL` points at whichever ([03](03-content-and-data.md#open-questions)).
-- **Model choice** — confirm `ANTHROPIC_MODEL` default after eval results ([07](07-testing-and-evals.md)).
+- **Model choice** — confirm the `LLM_MODEL` default after eval results ([07](07-testing-and-evals.md)); note it picks the upstream provider (compliance).
+- **DB & media durability** — confirm `DB_PATH` and `MEDIA_DIR` sit on a backed-up persistent volume in prod ([04 · Backups](04-service-and-deployment.md#backups--tls)).
+- **Admin exposure** — public-port + TLS + IP allowlist vs VPN-only ([08](08-admin-ui.md)).

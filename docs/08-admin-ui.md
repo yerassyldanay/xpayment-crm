@@ -1,94 +1,73 @@
-# 08 · Admin & Content Workflow (GitOps)
+# 08 · Admin UI (server-rendered, Go templates + htmx)
 
-How the team edits the bot's brain — persona, knowledge, prices, media — and tests changes before they go live. There is **no admin UI in v1**: the admin surface is **git on `xpayment-content`** (Decision 12). The file shapes and the snapshot/validation are in [03-content-and-data.md](03-content-and-data.md); the HTTP reload hook + Playground are in [06-api-and-contracts.md](06-api-and-contracts.md).
-
----
-
-## No UI in v1 — git is the admin surface
-
-Because the brain is stateless and file-backed (Decision 2), everything an admin would change lives in `xpayment-content`. Editing those files with normal git tooling **is** the admin workflow — so there is **no admin API, no Vue admin, and no cross-service auth** to build for v1. Access control is git access control (repo permissions, branch protection, PR review). A polished UI can come later (below), but it is not needed to operate the bot.
+The **built-in** admin where the team edits the bot's settings and knowledge base. It is served by the **same Go binary** on the **same port** as the webhook (Decision 12) — **no `xpayment-frontend`, no JS build, no separate deploy**. The data schema and the draft/publish lifecycle are in [03-content-and-data.md](03-content-and-data.md); the HTTP routes are in [06-api-and-contracts.md](06-api-and-contracts.md).
 
 ---
 
-## How operators change things
+## How it's built
 
-| To change… | Edit | Then |
+- **Server-rendered Go `html/template` + [htmx](https://htmx.org/).** Pages are HTML; forms POST to `/admin/...` handlers; handlers render **partial templates** that htmx swaps into the page. No SPA, no build step, no Node.
+- **Embedded in the binary.** Templates and static assets (htmx, a little CSS) ship via `embed.FS`, so the whole UI travels with the one executable.
+- **Served at `/admin/*`** behind a session login; everything is one origin → **no cross-service auth** (the problem the standalone design removes).
+
+```
+GET  /admin                      → dashboard
+GET  /admin/persona              → edit persona + guardrails (draft)        POST → save draft (htmx partial)
+GET  /admin/topics               → list kb_topics                          POST/PUT/DELETE rows
+GET  /admin/media                → list kb_assets + upload                  POST upload → MEDIA_DIR + row
+GET  /admin/prices               → edit tariffs + placeholders              POST → save (review-gated)
+GET  /admin/playground           → dry-run a message                       POST → render the draft + debug
+POST /admin/publish              → validate → promote draft → hot-reload
+POST /admin/rollback?v=N         → re-publish version N
+GET  /admin/versions             → version + audit log
+```
+
+---
+
+## Auth (same-service login)
+
+Because the UI and the API are the same service, auth is a **simple admin login** — no tokens across services:
+
+- `ADMIN_USER` + `ADMIN_PASSWORD` (stored hashed) → a **signed session cookie** ([05](05-configuration.md)).
+- Session middleware guards every `/admin/*` route; the webhook route stays separate (its own secret).
+- **The admin is on the public port, so:** serve only over **TLS** ([04](04-service-and-deployment.md#backups--tls)), put a **CSRF token** on every form, rate-limit the login, use a strong `ADMIN_PASSWORD`, and ideally an **IP allowlist** in the reverse proxy. Treat `/admin` as internet-exposed.
+
+---
+
+## Screens
+
+| Screen | Edits | Notes |
 |---|---|---|
-| Persona / guardrails / model settings | `assistant.json` | commit |
-| A price or cashier limit | `pricing.json` | commit (review-gated) |
-| An answer | the topic's markdown in `knowledge/` | commit |
-| Add a media file | drop the binary in `media/` **and** add an entry to `media.json` | commit both |
-| Remove a media file | delete the binary **and** its `media.json` entry | commit both |
-
-The two-step for media (binary **and** `media.json`) is enforced by the load-time validator: a `media.json` entry whose `file` is missing fails the snapshot ([03 · validate on load](03-content-and-data.md#validate-on-load-fail-loudly)).
-
----
-
-## `git status` / `git diff` = the review surface
-
-Every change is visible before it ships:
-
-```console
-$ git status
-On branch main
-Changes not staged for commit:
-  modified:   assistant.json
-  modified:   pricing.json
-  modified:   media.json
-  deleted:    media/onboarding/old-setup.mp4
-Untracked files:
-  media/onboarding/new-setup.mp4
-
-$ git diff pricing.json
--    "growth": { "price_tenge": 19900, "cashier_limit": 5 },
-+    "growth": { "price_tenge": 22900, "cashier_limit": 5 },
-```
-
-## The lifecycle maps onto git
-
-| Lifecycle | Git action |
-|---|---|
-| **Draft** | a branch, or just the working copy |
-| **Publish** | merge to `main` + push |
-| **Rollback** | `git revert <commit>` |
-| **Audit** ("who raised the price, when") | `git log` / `git blame pricing.json` |
-| **Review** | a pull request (recommended for `pricing.json`) |
-
-Protect `main` and add CODEOWNERS on `pricing.json` so price changes require review — that is the whole price-governance story (Decision 8).
+| **Dashboard** | — | current published version, last publish, quick links |
+| **Persona & guardrails** | `assistant_config` (draft): persona, mission, guardrails, language policy, reply-max-words, enabled tools | the bot's "soul" ([11](11-sales-playbook.md)); the LLM **model is `LLM_MODEL` env**, not edited here (Decision 13) |
+| **Topics** | `kb_topics` (bilingual RU/KK), markdown body with a **price-token helper** | tokens, never digits (Decision 8) |
+| **Media** | `kb_assets` + **upload** to `MEDIA_DIR` | the LLM-facing `description` is the selection menu entry |
+| **Prices** | `tariffs` + `placeholders` | the single price source; review-gated |
+| **Playground** | nothing — **dry-run** | see below |
+| **Versions** | publish / rollback / audit log | draft → publish → rollback ([03](03-content-and-data.md#draft--publish--rollback-the-config-lifecycle)) |
 
 ---
 
-## Reload-on-change
+## The config lifecycle (draft → publish → rollback)
 
-The brain reloads when `xpayment-content` changes: a **GitHub push webhook** ([06 · reload webhook](06-api-and-contracts.md#github-reload-webhook)) triggers `git pull` → build a **new** `Snapshot` → **validate** → atomically swap only if valid (keep the old snapshot + log on failure). A `--reload` signal and a poll fallback are also supported. So **publish = merge + push**, and the bot picks it up within seconds — or rejects a broken change and keeps serving the last good config.
-
----
-
-## Playground CLI — test before you commit
-
-A CLI mode builds a `Snapshot` from the **working copy, including uncommitted edits**, and runs the real `HandleMessage` against it with a **mockable LLM and Chatwoot**, printing the resulting `Draft` (reply text with prices injected, chosen media, extracted profile, confidence). This is how an editor checks a change *before* committing:
-
-```console
-$ brain playground --content ./xpayment-content \
-    --lang ru --message "А сколько касс на тарифе Рост и сколько стоит?"
-draft (ru):  На тарифе «Рост» — до 5 касс, 19 900 ₸/мес. …
-media:       [tariffs_infographic_ru]
-profile:     {interested_tariff: growth}
-confidence:  0.82   escalate: false
-```
-
-Nothing is sent and no real conversation is touched. The same path powers the golden-set evals ([07-testing-and-evals.md](07-testing-and-evals.md)).
+You always edit a **draft**; the live bot keeps serving the **published** snapshot. **Publish** validates the draft ([03 · validate on load](03-content-and-data.md#validate-on-load-fail-loudly)) → promotes it → **hot-reloads** the in-memory snapshot (no restart). **Rollback** re-publishes an earlier version. Every change is in the `audit_log`. A bad edit never reaches a customer because (a) it's a draft until you publish, and (b) publish refuses an invalid snapshot.
 
 ---
 
-## A future UI (optional, later)
+## Playground (test before you publish)
 
-If non-technical editing is wanted, a thin admin UI can be added in Phase 3 that **reads and commits the same files** in `xpayment-content` via the GitHub API (or a server-side checkout). It would be a convenience layer over the git lifecycle — **the brain is unchanged**, since it still loads its snapshot from the repo. Until then, git + the Playground CLI are the workflow.
+The most-used screen. Type a customer message, pick a language, and the brain runs the **real `HandleMessage`** against the **draft** config + live KB — with an **LLM toggle** (real OpenRouter call, or a stubbed response) and a **mocked Chatwoot** — then renders the resulting `Draft`: reply text (prices injected), chosen media (previews), extracted `profile_patch`, matched topic, confidence, escalate. **Nothing is sent and no real conversation is touched.** This is where you tune the persona/KB/prices before publishing, and it's the same path the [golden-set evals](07-testing-and-evals.md#golden-set-eval-harness) use.
+
+---
+
+## Testing
+
+`httptest`-based handler tests for the admin routes (render, save-draft, publish-validates-and-rejects-bad-config, rollback) + the Playground dry-run. No browser/JS test stack needed since there's no SPA ([07](07-testing-and-evals.md)).
 
 ---
 
 ## Open questions
 
-- **Merge rights** — who may merge to `xpayment-content` `main`, and is `pricing.json` CODEOWNERS-gated?
-- **Media storage** — Git LFS vs object storage for video (also in [03](03-content-and-data.md#open-questions)).
-- **Reload webhook security** — the shared secret on the GitHub push webhook ([06](06-api-and-contracts.md#github-reload-webhook)).
+- **Auth model** — one shared `ADMIN_USER` login (simplest) vs. per-user admin accounts with the `audit_log` attributing changes.
+- **Exposure** — admin on the public port behind TLS + IP allowlist, vs. only reachable over a VPN/private network.
+- **Editor richness** — plain `<textarea>` for topic markdown vs. a light markdown editor with live token preview.

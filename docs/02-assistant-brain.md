@@ -58,13 +58,13 @@ To avoid loops and noise, `HandleMessage` is only invoked for **incoming custome
 
 ## Prompt assembly
 
-The prompt is a **cached static prefix** `[A]–[E]` plus a small **dynamic suffix**. Mark the **cache breakpoint after `[E]`** (Decision 7; cache caveat in [01](01-infrastructure.md#prompt-cache-caveat)).
+The prompt is a **cached static prefix** `[A]–[E]` plus a small **dynamic suffix**. Mark the **cache breakpoint after `[E]`** (Decision 7; cache caveat in [01](01-infrastructure.md#prompt-cache-caveat)). For the **fully-filled prompt, the OpenRouter call, and worked KK/RU examples**, see [10-prompt-and-examples.md](10-prompt-and-examples.md).
 
 ```
 ┌─────────────────────────── CACHED PREFIX (stable across messages) ───────────────────────────┐
 │ [A] FRAME      code-owned, never editable: role · the JSON output contract · the hard rules    │
-│ [B] IDENTITY   assistant.json persona — who the bot is, tone                                    │
-│ [C] GUARDRAILS assistant.json guardrails — what it must/мustn't do                           │
+│ [B] IDENTITY   assistant_config persona — who the bot is, tone                                    │
+│ [C] GUARDRAILS assistant_config guardrails — what it must/мustn't do                           │
 │ [D] KNOWLEDGE  every topic body, both languages, price tokens left intact                       │
 │ [E] MEDIA      the whole catalog as `ref | kind | topic | description` — the selection menu     │
 ├──────────────────────────────  ⟵ cache breakpoint  ──────────────────────────────────────────┤
@@ -74,7 +74,7 @@ The prompt is a **cached static prefix** `[A]–[E]` plus a small **dynamic suff
 
 ### The FRAME `[A]` — the hard rules (code-owned)
 
-`[A]` is never editable (the code-owned "skeleton"; the editable "soul" is `assistant.json`, see [03](03-content-and-data.md#file-shapes)). It states the role, embeds the **JSON output contract** (below), and enforces:
+`[A]` is never editable (the code-owned "skeleton"; the editable "soul" is `assistant_config`, see [03](03-content-and-data.md#schema-ddl)). It states the role, embeds the **JSON output contract** (below), and enforces:
 
 - Answer **only** from the knowledge base `[D]`. If the answer isn't there, **escalate** instead of inventing.
 - **Never write price or limit numerals.** Leave the `{{price.*}}` / `{{limit.*}}` tokens verbatim; Go fills them after the model (Decision 8).
@@ -84,7 +84,7 @@ The prompt is a **cached static prefix** `[A]–[E]` plus a small **dynamic suff
 
 ### `[B]`–`[E]` — the editable content
 
-`[B]` identity and `[C]` guardrails come from the snapshot's `assistant.json` (`Snapshot.Config`). `[D]` is every topic body from `knowledge/*.md` in both languages (tokens intact). `[E]` is the whole `media.json` catalog rendered as a compact menu the model picks from. All three are authored material — file shapes and lifecycle in [03-content-and-data.md](03-content-and-data.md).
+`[B]` identity and `[C]` guardrails come from the snapshot's `assistant_config` (`Snapshot.Config`). `[D]` is every topic body from `kb_topics` in both languages (tokens intact). `[E]` is the whole `kb_assets` catalog rendered as a compact menu the model picks from. All three are authored material — schema and lifecycle in [03-content-and-data.md](03-content-and-data.md).
 
 ---
 
@@ -148,8 +148,8 @@ type Drafter interface {
     Draft(ctx context.Context, prompt Prompt) (RawDraft, error)
 }
 
-// The immutable content snapshot (assistant.json + pricing + topics + media),
-// loaded from xpayment-content and hot-swapped on reload (03). No DB, no retrieval (Decision 7).
+// The immutable content snapshot (assistant_config + pricing + topics + media),
+// loaded from SQLite and hot-swapped on publish (03). LLM-as-selector, no vector DB (Decision 7).
 type ContentSource interface {
     Get() *Snapshot                                                     // config + topics + catalog + prices
 }
@@ -159,7 +159,7 @@ type Catalog interface {
     Resolve(refs []string) (resolved []ResolvedAsset, unknown []string)
 }
 
-// The single source of price numbers (from the snapshot's pricing.json).
+// The single source of price numbers (from the snapshot's tariffs).
 type Prices interface {
     Render(text string, lang string) (string, error)                   // replace {{...}} tokens
 }
