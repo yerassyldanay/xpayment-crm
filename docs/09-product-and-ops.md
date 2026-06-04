@@ -12,7 +12,7 @@ Turn the WhatsApp inbox from a manual, founder-bottlenecked sales channel into a
 
 - **The merchant (customer):** a Kazakhstani business owner or their developer/employee, on WhatsApp, in RU or KK, asking about what xpayment does, tariffs, cashier limits, and how to integrate. Often price-sensitive and security-cautious (the Kaspi cashier-role question).
 - **The rep (primary user):** the founder/sales person working the Chatwoot inbox. Wants to answer faster, never misquote a price, and not lose track of follow-ups.
-- **The admin (config owner):** edits the persona, KB, media, and prices in the Vue admin ([08](08-admin-ui.md)); runs the Playground and the eval gate before publishing.
+- **The admin (config owner):** edits the persona, KB, media, and prices as files in `xpayment-content` via git ([08](08-admin-ui.md)); runs the Playground CLI and the eval gate before publishing (merge).
 
 ## Job to be done
 
@@ -39,7 +39,7 @@ Track from day one; most are computable from Chatwoot data.
 | **Escalation rate** | How often the bot correctly defers to a human; too high = KB gaps, too low = over-confidence. |
 | **Conversion** (lead→trial→paid) | The business outcome; attribute against the profile. |
 
-> `fit_score` ([03](03-content-and-data.md#the-lead-profile-lives-on-the-chatwoot-contact-not-here)) is a **prioritization sort key, not truth**, until calibrated against real conversions — do not report it as a probability in month one.
+> `fit_score` ([03](03-content-and-data.md#the-lead-profile-lives-in-chatwoot-not-here)) is a **prioritization sort key, not truth**, until calibrated against real conversions — do not report it as a probability in month one.
 
 ---
 
@@ -73,7 +73,7 @@ This is the highest-priority open item, not a footnote.
 Small at this scale, but make it explicit so it isn't a surprise.
 
 - **LLM (Anthropic).** Per drafted message ≈ (cached-prefix read + dynamic suffix in) + (short output) tokens. The prefix (persona + KB + media catalog) is large but cached; the suffix (window + profile + message) and the ≤~120-word output are small. At ~100 leads with a few messages each, expect a **low monthly bill**; cap output with `ANTHROPIC_MAX_TOKENS`. Note the prompt-cache caveat ([01](01-infrastructure.md#prompt-cache-caveat)) — savings are modest at low frequency. Eval runs (LLM-as-judge) add cost; run them nightly/manually, not per PR ([07](07-testing-and-evals.md#ci)).
-- **Infra.** Three self-hosted services (Chatwoot, Evolution, the brain) + their Postgres/Redis fit on one modest VPS. The biggest operational cost is **attention** (session health, backups), not compute.
+- **Infra.** Three self-hosted services (Chatwoot, Evolution, the brain) fit on one modest VPS — Chatwoot & Evolution each bring a Postgres/Redis; the **brain is stateless** (no DB). The biggest operational cost is **attention** (session health, backups), not compute.
 
 ---
 
@@ -98,7 +98,7 @@ The single consolidated list (Definition-of-Ready #6 in [README](README.md#defin
 | # | Question | Surfaced in | Owner | Status |
 |---|---|---|---|---|
 | 1 | **Anthropic + KZ personal-data law** — lawful basis / consent / minimization for sending chat abroad | 05, 09 | — | **open (blocks go-live)** |
-| 2 | Cross-service **admin auth** — `introspect` vs `static`; exact main-backend validate endpoint + `is_admin` check | 05, 08 | — | open |
+| 2 | **Content governance** — who may merge to `xpayment-content` `main`; CODEOWNERS on `pricing.json`; reload-webhook secret | 06, 08 | — | open |
 | 3 | **Webhook signing** — does Chatwoot sign account webhooks; else secret-header/path | 01, 06 | — | open |
 | 4 | **`message_created` payload** — exact `contact_id` path + classification completeness | 01, 06 | — | open |
 | 5 | **Messages endpoint** — ordering/pagination to fetch the last ~15 (window size) | 02, 06 | — | open |
@@ -108,8 +108,8 @@ The single consolidated list (Definition-of-Ready #6 in [README](README.md#defin
 | 9 | **Auto-send confidence threshold** — the numeric gate for Phase 3 | 02, 07 | — | open |
 | 10 | **Eval thresholds + judge model + golden-set size/refresh** | 07 | — | open |
 | 11 | **KK/RU authoring coverage** + mixed-language tie-break rule | 02, 03 | — | open |
-| 12 | **Price-edit authority** — who may edit `tariffs`, through what gate | 03, 08 | — | open |
+| 12 | **Media storage** — Git LFS vs object storage for video; `KB_MEDIA_BASE_URL` target | 03, 05 | — | open |
 | 13 | **`fit_score` calibration** against real conversions | 03, 09 | — | open |
 | 14 | **Deploy target / shared infra / image tags** (Chatwoot, Evolution, brain) | 04 | — | open |
-| 15 | **Model choice** (`ANTHROPIC_MODEL`) after eval results; **DB SSL** in prod | 05 | — | open |
-| 16 | **Frontend tests** — add vitest vs manual+Playground for v1 | 07, 08 | — | open |
+| 15 | **Model choice** (`ANTHROPIC_MODEL`) after eval results; **content delivery** (mount vs clone) | 04, 05 | — | open |
+| 16 | **Content-repo CI** — snapshot-validation + golden set as a required PR check on `xpayment-content` | 07 | — | open |

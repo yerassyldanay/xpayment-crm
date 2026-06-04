@@ -8,7 +8,7 @@ The brain's own HTTP surface, plus the **exact Chatwoot calls** the adapter make
 
 ## Brain HTTP surface
 
-Two groups: the **public webhook receiver** (Chatwoot → brain) and the **admin API** (the Vue UI → brain). Generate the spec with `swag` like the main repo (`make swagger`); annotate handlers the same way.
+Two HTTP endpoints, both **server-to-server**: the **Chatwoot webhook receiver** (Chatwoot → brain) and the **GitHub reload webhook** (content repo → brain). There is **no admin API** — config is edited in `xpayment-content` via git (Decision 12; [08](08-admin-ui.md)). Generate the spec with `swag` like the main repo (`make swagger`).
 
 ### Webhook receiver
 
@@ -21,24 +21,24 @@ POST /v1/assistant/webhook/chatwoot
 - **Behavior:** classify → if it is an **incoming, non-private** message on the configured inbox, run `HandleMessage`; otherwise ignore. Return **`200` quickly** so Chatwoot does not retry on latency; at ~100 leads the LLM call can run inline within the request, but keep the handler idempotent on the Chatwoot message id (de-dupe redelivery).
 - **Response:** `200 {"status":"ok"}` always (even on ignore), so Chatwoot marks delivery successful. Log failures; do not 500 on a recoverable LLM error (post an escalation note instead — [02 · post-processing](02-assistant-brain.md#post-processing-pipeline)).
 
-### Admin API
+### GitHub reload webhook
 
-Base path `/v1/admin/assistant`. Auth per [08-admin-ui.md](08-admin-ui.md) (`ADMIN_AUTH_MODE`). Backed by the schemas in [03-content-and-data.md](03-content-and-data.md).
+```
+POST /v1/assistant/reload
+```
 
-| Method & path | Purpose |
-|---|---|
-| `GET /config` · `PUT /config` | Read / edit the draft `assistant_configs` row |
-| `GET /config/versions` · `POST /config/publish` · `POST /config/rollback` | Version lifecycle (one published at a time) |
-| `GET/POST/PUT/DELETE /topics` | `kb_topics` CRUD |
-| `GET/POST/PUT/DELETE /assets` | `kb_assets` CRUD (metadata only; binaries live in `xpayment-content`) |
-| `GET/PUT /prices` | `tariffs` + `placeholders` |
-| `POST /playground` | Dry-run: `{message, language, config_version?}` → a full `Draft` preview, **nothing sent** |
+- **Auth:** verify `RELOAD_WEBHOOK_SECRET` (GitHub's `X-Hub-Signature-256` HMAC over the body).
+- **Trigger:** a push to `xpayment-content`'s `main` ([08 · reload](08-admin-ui.md#reload-on-change)).
+- **Behavior:** `git pull` the content checkout → build a new `Snapshot` → **validate** ([03 · validate on load](03-content-and-data.md#validate-on-load-fail-loudly)) → atomically swap **only if valid**; on failure keep the old snapshot and log (never serve a broken config). A local `--reload` signal and a slow poll are also supported.
+- **Response:** `200 {"reloaded": true, "commit": "<sha>"}` or `200 {"reloaded": false, "error": "…"}`.
 
-`POST /playground` response mirrors the post-processed `Draft` ([02 · the contract](02-assistant-brain.md#the-contract)) plus debug fields:
+### Playground (CLI, not HTTP)
+
+Config changes are tested with the **Playground CLI**, which builds a snapshot from the **working copy** (including uncommitted edits) and runs `HandleMessage` with a mockable LLM + Chatwoot — see [08 · Playground CLI](08-admin-ui.md#playground-cli--test-before-you-commit). Its output mirrors the post-processed `Draft` ([02 · the contract](02-assistant-brain.md#the-contract)) plus debug fields:
 
 ```json
 {
-  "reply_text": "На тарифе «Рост» можно подключить до 5 касс, стоимость — 25 000 ₸ …",
+  "reply_text": "На тарифе «Рост» можно подключить до 5 касс, стоимость — 19 900 ₸ …",
   "reply_language": "ru",
   "media": [{"ref": "add_cashier_video", "kind": "screen_recording", "url": "https://…"}],
   "profile_patch": {"interested_tariff": "growth"},

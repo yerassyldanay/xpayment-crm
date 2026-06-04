@@ -63,8 +63,8 @@ The prompt is a **cached static prefix** `[A]–[E]` plus a small **dynamic suff
 ```
 ┌─────────────────────────── CACHED PREFIX (stable across messages) ───────────────────────────┐
 │ [A] FRAME      code-owned, never editable: role · the JSON output contract · the hard rules    │
-│ [B] IDENTITY   assistant_configs.persona — who the bot is, tone                                 │
-│ [C] GUARDRAILS assistant_configs.guardrails — what it must/мustn't do                           │
+│ [B] IDENTITY   assistant.json persona — who the bot is, tone                                    │
+│ [C] GUARDRAILS assistant.json guardrails — what it must/мustn't do                           │
 │ [D] KNOWLEDGE  every topic body, both languages, price tokens left intact                       │
 │ [E] MEDIA      the whole catalog as `ref | kind | topic | description` — the selection menu     │
 ├──────────────────────────────  ⟵ cache breakpoint  ──────────────────────────────────────────┤
@@ -74,7 +74,7 @@ The prompt is a **cached static prefix** `[A]–[E]` plus a small **dynamic suff
 
 ### The FRAME `[A]` — the hard rules (code-owned)
 
-`[A]` is never editable from the admin (the "skeleton"; see soul-vs-skeleton in [03](03-content-and-data.md#assistant-config)). It states the role, embeds the **JSON output contract** (below), and enforces:
+`[A]` is never editable (the code-owned "skeleton"; the editable "soul" is `assistant.json`, see [03](03-content-and-data.md#file-shapes)). It states the role, embeds the **JSON output contract** (below), and enforces:
 
 - Answer **only** from the knowledge base `[D]`. If the answer isn't there, **escalate** instead of inventing.
 - **Never write price or limit numerals.** Leave the `{{price.*}}` / `{{limit.*}}` tokens verbatim; Go fills them after the model (Decision 8).
@@ -84,7 +84,7 @@ The prompt is a **cached static prefix** `[A]–[E]` plus a small **dynamic suff
 
 ### `[B]`–`[E]` — the editable content
 
-`[B]` identity and `[C]` guardrails come from the **published** `assistant_configs` row. `[D]` is the full set of active `kb_topics` bodies in both languages (tokens intact). `[E]` is the full set of active `kb_assets` rendered as a compact menu the model picks from. All three are authored material — schemas and lifecycle in [03-content-and-data.md](03-content-and-data.md).
+`[B]` identity and `[C]` guardrails come from the snapshot's `assistant.json` (`Snapshot.Config`). `[D]` is every topic body from `knowledge/*.md` in both languages (tokens intact). `[E]` is the whole `media.json` catalog rendered as a compact menu the model picks from. All three are authored material — file shapes and lifecycle in [03-content-and-data.md](03-content-and-data.md).
 
 ---
 
@@ -114,8 +114,8 @@ What the brain does with that JSON, **in order**:
 
 1. **Parse defensively.** Strip any code fences, parse JSON, validate the shape and types. A malformed response is treated like a low-confidence escalation, not a crash.
 2. **Escalate gate.** If `escalate` is true, post a flag note (with `escalation_reason`) for a human and **stop** — no media, no auto-send.
-3. **Validate + resolve `asset_refs`.** For each ref, look it up in the catalog via `KB.ResolveRefs`; **drop unknown/hallucinated refs and log them**; cap at 3; keep only resolved `{ref → url, kind}`. Wrong-topic or hallucinated media is a correctness error, so media-selection precision is scored separately in evals ([03](03-content-and-data.md#admin--config-lifecycle)).
-4. **Inject prices.** Run `reply_text` through `Prices.Render(text, lang)` to replace every `{{...}}` token from the PriceBook in the target language. If any token is unknown or left over, do **not** ship a half-rendered price — post a "check pricing manually" note instead (Decision 8; token grammar and failure path in [03](03-content-and-data.md#pricing--templates)).
+3. **Validate + resolve `asset_refs`.** For each ref, look it up in the snapshot's catalog via `Catalog.Resolve`; **drop unknown/hallucinated refs and log them**; cap at 3; keep only resolved `{ref → url, kind}`. Wrong-topic or hallucinated media is a correctness error, so media-selection precision is scored separately in evals ([07](07-testing-and-evals.md#golden-set-eval-harness)).
+4. **Inject prices.** Run `reply_text` through `Prices.Render(text, lang)` to replace every `{{...}}` token from the PriceBook in the target language. If any token is unknown or left over, do **not** ship a half-rendered price — post a "check pricing manually" note instead (Decision 8; token grammar and failure path in [03](03-content-and-data.md#pricing--tokens-canonical)).
 5. **Additively merge `profile_patch`.** Merge onto the contact's custom attributes; **never null a known field** (Decision 9). Drop the `stage` key if present — that is status, handled next.
 6. **Apply status.** Map `suggested_status.stage` to a Chatwoot **label** on the conversation.
 7. **Outcome.**
@@ -148,21 +148,20 @@ type Drafter interface {
     Draft(ctx context.Context, prompt Prompt) (RawDraft, error)
 }
 
-// Load the whole KB + media catalog for the cached prefix, and resolve refs after.
-// No retrieval today (Decision 7); the graduation path lives behind this same port.
-type KnowledgeRetriever interface {
-    Load(ctx context.Context) (KnowledgeBase, error)                    // all topics + catalog
-    ResolveRefs(refs []string) (resolved []ResolvedAsset, unknown []string)
+// The immutable content snapshot (assistant.json + pricing + topics + media),
+// loaded from xpayment-content and hot-swapped on reload (03). No DB, no retrieval (Decision 7).
+type ContentSource interface {
+    Get() *Snapshot                                                     // config + topics + catalog + prices
 }
 
-// The single source of price numbers.
+// Resolve the refs the model picked against the snapshot's media catalog.
+type Catalog interface {
+    Resolve(refs []string) (resolved []ResolvedAsset, unknown []string)
+}
+
+// The single source of price numbers (from the snapshot's pricing.json).
 type Prices interface {
     Render(text string, lang string) (string, error)                   // replace {{...}} tokens
-}
-
-// The published persona/guardrails/skeleton config.
-type ConfigStore interface {
-    Published(ctx context.Context) (AssistantConfig, error)
 }
 ```
 
@@ -222,7 +221,7 @@ CURRENT MESSAGE:
 }
 ```
 
-**After post-processing** (values below are *illustrative* — the real numbers come from the PriceBook, [03](03-content-and-data.md#pricing--templates)):
+**After post-processing** (values below are *illustrative* — the real numbers come from the PriceBook, [03](03-content-and-data.md#pricing--tokens-canonical)):
 
 - **Prices injected:** `… до 5 касс, стоимость — 25 000 ₸ в месяц …` (`{{limit.growth}}` and `{{price.growth}}` rendered in Russian).
 - **Media resolved:** `pricing_table` and `add_cashier_video` → two `ResolvedAsset` URLs (both existed in the catalog; none dropped).

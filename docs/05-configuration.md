@@ -1,18 +1,19 @@
 # 05 · Configuration
 
-This file is the **canonical home for every environment variable** the brain reads (just as [03-content-and-data.md](03-content-and-data.md) is the home for all DDL). Other docs reference these names and never restate the catalog. Decision context is in [README.md](README.md); how config is consumed at boot is in [04-service-and-deployment.md](04-service-and-deployment.md).
+This file is the **canonical home for every environment variable** the brain reads (just as [03-content-and-data.md](03-content-and-data.md) is the home for the content-repo file shapes). Other docs reference these names and never restate the catalog. Decision context is in [README.md](README.md); how config is consumed at boot is in [04-service-and-deployment.md](04-service-and-deployment.md).
 
 ## Loading pattern
 
 Copy `xpayment/internal/infrastructure/config/config.go`:
 
-- A single `Config` struct composed of nested structs (`Chatwoot`, `Anthropic`, `OTel`, …).
+- A single `Config` struct composed of nested structs (`Chatwoot`, `Anthropic`, `Content`, `OTel`, …).
 - A `getEnv(key, fallback)` helper that trims and falls back to a default; **required** values are validated at startup and the service refuses to boot if missing.
 - `loadDotEnv(".env")` at startup, with the file split:
   - **`.env`** — local dev, contains secrets, **gitignored**.
   - **`.env.example`** — committed template, every key present with placeholder/empty values.
-  - **`.env.remote`** — committed production overrides, **no secrets** (secrets are injected by the host/orchestrator).
-- A `buildDatabaseURL()` that prefers `DATABASE_URL` and otherwise assembles it from parts (mirror the main repo).
+  - **`.env.remote`** — committed production overrides, **no secrets** (injected by the host/orchestrator).
+
+The brain has **no database** (Decision 2) — there is no `DATABASE_URL`. Its persona/KB/prices/media come from the content repo (the `Content` group below).
 
 ```go
 // shape only — see xpayment/internal/infrastructure/config/config.go
@@ -20,11 +21,9 @@ type Config struct {
     Env       string        // APP_ENV
     LogLevel  string        // LOG_LEVEL
     HTTPAddr  string        // HTTP_ADDR
-    Database  DatabaseConfig
     Chatwoot  ChatwootConfig
     Anthropic AnthropicConfig
-    KB        KBConfig
-    Admin     AdminAuthConfig
+    Content   ContentConfig
     OTel      OTelConfig
 }
 ```
@@ -41,19 +40,8 @@ Legend — **Req?**: ✅ required (no safe default), ⚙️ has a default, 🔒 
 | `LOG_LEVEL` | `info` | ⚙️ | `LogLevel` | `debug`\|`info`\|`warn`\|`error`. |
 | `HTTP_ADDR` | `:8080` | ⚙️ | `HTTPAddr` | Listen address. Matches `EXPOSE 8080` ([04](04-service-and-deployment.md#dockerfile)). |
 | `METRICS_TOKEN` | `` (off) | ⚙️🔒 | `MetricsToken` | If set, `GET /metrics` requires `Authorization: Bearer <token>`. |
-| `ALLOWED_ORIGINS` | `` | ⚙️ | `AllowedOrigins` | Comma-separated; CORS allowlist for the admin API ([08](08-admin-ui.md)). |
 
-### Brain database (its own Postgres — Decision 2)
-
-| Variable | Default | Req? | Struct field | Note |
-|---|---|---|---|---|
-| `DATABASE_URL` | built from parts | ⚙️ | `Database.URL` | Full DSN; if unset, assembled from the parts below. |
-| `DB_HOST` | `localhost` | ⚙️ | — | Used only when `DATABASE_URL` unset. |
-| `DB_PORT` | `5432` | ⚙️ | — | |
-| `DB_NAME` | `brain_db` | ⚙️ | — | |
-| `DB_USER` | `brain` | ⚙️ | — | |
-| `DB_PASSWORD` | `` | ⚙️🔒 | — | |
-| `DB_SSLMODE` | `disable` (dev) | ⚙️ | — | `require` in production. |
+*(No `ALLOWED_ORIGINS`/CORS in v1 — the only HTTP endpoints are server-to-server webhooks; there is no browser-facing admin API.)*
 
 ### Chatwoot (the hub — [01](01-infrastructure.md), [06](06-api-and-contracts.md))
 
@@ -75,19 +63,15 @@ Legend — **Req?**: ✅ required (no safe default), ⚙️ has a default, 🔒 
 
 > **Compliance gate.** Setting `ANTHROPIC_API_KEY` means customer conversation text is sent to Anthropic. Confirm this is permitted under Kazakhstan's personal-data law before production — tracked in [09 · open-questions](09-product-and-ops.md).
 
-### Knowledge-base media ([03](03-content-and-data.md))
+### Content repo (the config source — Decision 2; [03](03-content-and-data.md), [08](08-admin-ui.md))
 
 | Variable | Default | Req? | Struct field | Note |
 |---|---|---|---|---|
-| `KB_MEDIA_BASE_URL` | — | ✅ | `KB.MediaBaseURL` | Static base for `xpayment-content/knowledge-base/…`; `kb_assets.url` resolves against it. |
-
-### Admin auth (cross-service — [08](08-admin-ui.md))
-
-| Variable | Default | Req? | Struct field | Note |
-|---|---|---|---|---|
-| `ADMIN_AUTH_MODE` | `static` | ⚙️ | `Admin.Mode` | `static` (shared admin token) or `introspect` (validate main-backend user tokens). |
-| `ADMIN_API_TOKEN` | — | cond.🔒 | `Admin.Token` | Required when `ADMIN_AUTH_MODE=static`. |
-| `MAIN_BACKEND_BASE_URL` | — | cond. | `Admin.IntrospectURL` | Required when `ADMIN_AUTH_MODE=introspect`; the brain calls it to validate `xusr_live_…` tokens. |
+| `CONTENT_REPO_PATH` | `./xpayment-content` | ✅ | `Content.Path` | Local checkout the brain loads the snapshot from. |
+| `CONTENT_REPO_URL` | `` | ⚙️ | `Content.RepoURL` | If set, the brain `git clone`/`pull`s this on boot and reload. |
+| `CONTENT_REPO_BRANCH` | `main` | ⚙️ | `Content.Branch` | Branch to track (publish = merge here). |
+| `KB_MEDIA_BASE_URL` | — | ✅ | `Content.MediaBaseURL` | Static base that `media.json` `file` paths resolve against (Git LFS / object storage / served `media/`). |
+| `RELOAD_WEBHOOK_SECRET` | — | ✅🔒 | `Content.ReloadSecret` | Verifies the GitHub push webhook that triggers reload ([06](06-api-and-contracts.md#github-reload-webhook)). |
 
 ### Observability (OTel — [04](04-service-and-deployment.md#observability))
 
@@ -100,12 +84,12 @@ Legend — **Req?**: ✅ required (no safe default), ⚙️ has a default, 🔒 
 
 ## Secrets handling
 
-- **Secret (🔒):** `ANTHROPIC_API_KEY`, `CHATWOOT_API_TOKEN`, `CHATWOOT_WEBHOOK_SECRET`, `ADMIN_API_TOKEN`, `DB_PASSWORD`, `METRICS_TOKEN`.
+- **Secret (🔒):** `ANTHROPIC_API_KEY`, `CHATWOOT_API_TOKEN`, `CHATWOOT_WEBHOOK_SECRET`, `RELOAD_WEBHOOK_SECRET`, `METRICS_TOKEN`.
 - Keep them only in the gitignored `.env` (dev) or injected by the host/secret manager (prod). Never in `.env.example` or `.env.remote`.
 - `.env.example` must list **every** key above with empty/placeholder values so a new engineer sees the full surface at a glance.
 
 ## Open questions
 
-- **Admin auth mode** — `static` vs `introspect` (recommendation in [08](08-admin-ui.md)); the chosen mode decides which of `ADMIN_API_TOKEN` / `MAIN_BACKEND_BASE_URL` is required.
+- **Content delivery** — mount the content repo as a read-only volume vs. `git clone` on boot ([04](04-service-and-deployment.md#content-checkout--reload)).
+- **Media storage** — Git LFS vs object storage for video; `KB_MEDIA_BASE_URL` points at whichever ([03](03-content-and-data.md#open-questions)).
 - **Model choice** — confirm `ANTHROPIC_MODEL` default after eval results ([07](07-testing-and-evals.md)).
-- **DB SSL** — confirm `DB_SSLMODE=require` and cert setup for the production brain DB.

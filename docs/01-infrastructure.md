@@ -88,7 +88,7 @@ Both services are self-hosted and each needs its own **Postgres + Redis**:
 - **Chatwoot** — Rails app + Sidekiq workers; Postgres for data, Redis for queues/websockets.
 - **Evolution API** — Node service holding the WhatsApp Web session; Postgres/Redis for instance state and message bookkeeping. The session is tied to a scanned WhatsApp number and must stay logged in.
 
-Keep them as separate deployments with separate datastores. The brain has its **own** small Postgres (config/KB/media/prices only — Decision 2; schema in [03-content-and-data.md](03-content-and-data.md)).
+Keep them as separate deployments with separate datastores. The **brain has no database** (Decision 2) — its config/KB/prices/media are files in the `xpayment-content` repo ([03-content-and-data.md](03-content-and-data.md)).
 
 ### Ban risk and outbound pacing
 
@@ -122,7 +122,7 @@ The brain caches the large static prompt prefix (persona + KB + media catalog) t
 Decision 1 makes Chatwoot the **system of record** for every contact, conversation, message, and the lead profile (stored as contact custom attributes). That data only exists in Chatwoot's Postgres — back it up like it matters:
 
 - **Chatwoot Postgres** — scheduled `pg_dump` (e.g. nightly) to offsite storage; **test restores periodically**. This is the irreplaceable database.
-- **Brain Postgres** — holds only authored config/KB/prices ([03](03-content-and-data.md)); back it up too, but it is recoverable from the admin UI / git if lost.
+- **Brain** — stateless; nothing to back up. Its config lives in the `xpayment-content` git repo ([03](03-content-and-data.md)) and on GitHub.
 - **Evolution session state** — losing it forces a WhatsApp re-login (re-scan), not data loss.
 
 See the cadence note in [04 · Backups & TLS](04-service-and-deployment.md#backups--tls).
