@@ -116,7 +116,7 @@ What the brain does with that JSON, **in order**:
 2. **Escalate gate.** If `escalate` is true, post a flag note (with `escalation_reason`) for a human and **stop** — no media, no auto-send.
 3. **Validate + resolve `asset_refs`.** For each ref, look it up in the snapshot's catalog via `Catalog.Resolve`; **drop unknown/hallucinated refs and log them**; cap at 3; keep only resolved `{ref → url, kind}`. Wrong-topic or hallucinated media is a correctness error, so media-selection precision is scored separately in evals ([07](07-testing-and-evals.md#golden-set-eval-harness)).
 4. **Inject prices.** Run `reply_text` through `Prices.Render(text, lang)` to replace every `{{...}}` token from the PriceBook in the target language. If any token is unknown or left over, do **not** ship a half-rendered price — post a "check pricing manually" note instead (Decision 8; token grammar and failure path in [03](03-content-and-data.md#pricing--tokens-canonical)).
-5. **Additively merge `profile_patch`.** Merge onto the contact's custom attributes; **never null a known field** (Decision 9). Drop the `stage` key if present — that is status, handled next.
+5. **Additively merge `profile_patch`.** Merge onto the contact's custom attributes: **add new fields, and overwrite a known field when the model is newly confident** (leads change — `urgency` `exploring`→`now`); but **never null/blank a field that was already known** (Decision 9). `never-null` ≠ first-write-wins. Drop the `stage` key if present — that is status, handled next.
 6. **Apply status.** Map `suggested_status.stage` to a Chatwoot **label** on the conversation.
 7. **Outcome.**
    - **v1 (suggest-only):** post the reply as a **private-note draft**.
@@ -238,6 +238,6 @@ What this illustrates:
 
 ## Open questions
 
-- **Exact window size.** Is "last 15 messages" the right cut, or a time-based "last 48h", or both with a cap? Tune against mined conversations.
+- **Exact window size.** Is "last 15 messages" the right cut, or a time-based "last 48h", or both with a cap? Tune against mined conversations — and **re-evaluate before Phase-3 auto-send**, where the window is the only safety net (no human reads the full thread).
 - **Confidence threshold for auto-send.** The numeric gate for Phase-3 auto-send is unset; calibrate it on the golden set before enabling.
 - **Escalation taxonomy.** Whether `escalation_reason` should be free text or a small enum the team can route on.

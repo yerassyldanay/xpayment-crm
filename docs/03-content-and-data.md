@@ -22,7 +22,7 @@ xpayment-content/
   README.md               the operator guide (see 08)
 ```
 
-Topic **bodies are markdown** (multi-line text in JSON is painful to edit and diff). Media **binaries** go in git via **Git LFS** for videos, or in object storage referenced by URL while small images stay in git — either way the **metadata stays in git** so `git status`/`git diff` reflect catalog changes ([08](08-admin-ui.md)).
+Topic **bodies are markdown** (multi-line text in JSON is painful to edit and diff). Media **binaries**: keep **small images in git**; put **video / screen-recordings in object storage**, referenced by URL in `media.json` (**recommended default** — keeps the repo and the brain's checkout light). Git LFS is a fallback only if you must keep video in git. Either way the **metadata stays in git** so `git status`/`git diff` reflect catalog changes ([08](08-admin-ui.md)).
 
 ---
 
@@ -155,7 +155,7 @@ The profile is computed by the brain and written to **Chatwoot contact custom at
 
 ## Open questions
 
-- **Media storage** — Git LFS for video vs. object storage (URL in `media.json`); decide before bulk-adding video.
+- **Media storage** — **decided default: object storage for video/screen-recordings, git for small images** (Git LFS only if you must keep video in git).
 - **KK/RU authoring coverage** — is **every** topic authored in both languages, or some RU-only with on-the-fly translation? Pricing is **never** translated on the fly — always rendered from `pricing.json` per language.
 - **Price-edit authority** — who may merge changes to `pricing.json` (git branch protection / CODEOWNERS).
 - **`fit_score` calibration** — arbitrary until validated against real conversions; treat as a sort key in month one.
