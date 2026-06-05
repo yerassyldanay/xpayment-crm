@@ -1,50 +1,101 @@
-# Local stack: Chatwoot + Evolution + the brain + a tunnel (docs/04 · local stack).
-# Illustrative — pin real image tags and verify upstream envs before relying on it.
-# Wiring order (docs/04): Chatwoot up → create account + agent token → Evolution up
-# + configure its Chatwoot integration → brain up → set the tunnel URL as Chatwoot's
-# account webhook → open /admin to seed persona/KB/prices.
+# Local full stack: Chatwoot (web + worker) + Evolution API + the brain, plus the
+# Postgres/Redis each needs. All on one Docker network, so Chatwoot reaches the
+# brain's webhook at http://brain:8080 and Evolution reaches Chatwoot at
+# http://chatwoot:3000 — NO public tunnel needed for an all-local stack.
+#
+# Config comes from one .env file (see .env.example). Compose interpolates
+# ${SECRET_KEY_BASE} and ${AUTHENTICATION_API_KEY} from it; the brain reads the
+# rest via env_file. Postgres passwords are dev-only literals below.
+#
+# See RUNBOOK.md for the step-by-step (first-boot DB prepare, wiring order).
+# Pin the chatwoot/evolution image tags to real releases before relying on this.
 
 services:
+  # ── Chatwoot (the hub) ──────────────────────────────────────────────────────
   chatwoot-postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16 # Chatwoot needs the pgvector extension
     environment:
       POSTGRES_DB: chatwoot
       POSTGRES_USER: chatwoot
-      POSTGRES_PASSWORD: ${CHATWOOT_DB_PASSWORD:-chatwoot}
+      POSTGRES_PASSWORD: chatwoot # dev only
     volumes: [chatwoot_pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "chatwoot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   chatwoot-redis:
     image: redis:7-alpine
+    volumes: [chatwoot_redis:/data]
 
-  chatwoot:
-    image: chatwoot/chatwoot:latest # pin a real tag in prod
-    depends_on: [chatwoot-postgres, chatwoot-redis]
-    env_file: [.env]
+  chatwoot: # Rails web
+    image: chatwoot/chatwoot:latest # PIN a real tag (e.g. v4.x) before relying on this
+    depends_on:
+      chatwoot-postgres: { condition: service_healthy }
+      chatwoot-redis: { condition: service_started }
+    environment: &chatwoot_env
+      INSTALLATION_ENV: docker
+      RAILS_ENV: production
+      NODE_ENV: production
+      SECRET_KEY_BASE: "${SECRET_KEY_BASE:?set SECRET_KEY_BASE in .env via openssl rand -hex 64}"
+      FRONTEND_URL: http://localhost:3000
+      ENABLE_ACCOUNT_SIGNUP: "true" # lets you create the first account on first boot
+      POSTGRES_HOST: chatwoot-postgres
+      POSTGRES_USERNAME: chatwoot
+      POSTGRES_PASSWORD: chatwoot
+      POSTGRES_DATABASE: chatwoot
+      REDIS_URL: redis://chatwoot-redis:6379
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
     ports: ["3000:3000"]
+    restart: unless-stopped
 
+  chatwoot-sidekiq: # background worker — fires the account webhook to the brain
+    image: chatwoot/chatwoot:latest # keep in lockstep with the chatwoot tag
+    depends_on:
+      chatwoot-postgres: { condition: service_healthy }
+      chatwoot-redis: { condition: service_started }
+    environment: *chatwoot_env
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+    restart: unless-stopped
+
+  # ── Evolution API (WhatsApp gateway) ─────────────────────────────────────────
   evolution-postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: evolution
       POSTGRES_USER: evolution
-      POSTGRES_PASSWORD: ${EVOLUTION_DB_PASSWORD:-evolution}
+      POSTGRES_PASSWORD: evolution # dev only
     volumes: [evo_pg:/var/lib/postgresql/data]
 
   evolution-redis:
     image: redis:7-alpine
+    volumes: [evo_redis:/data]
 
   evolution:
-    image: atendai/evolution-api:latest # pin a real tag in prod
+    image: atendai/evolution-api:latest # PIN a real tag (e.g. v2.x) before relying on this
     depends_on: [evolution-postgres, evolution-redis]
-    env_file: [.env]
+    environment:
+      AUTHENTICATION_API_KEY: "${AUTHENTICATION_API_KEY:?set AUTHENTICATION_API_KEY in .env via openssl rand -hex 16}"
+      SERVER_URL: http://localhost:8081
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:evolution@evolution-postgres:5432/evolution?schema=public
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://evolution-redis:6379/6
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_LOCAL_ENABLED: "false"
+    volumes: [evo_instances:/evolution/instances]
     ports: ["8081:8080"]
+    restart: unless-stopped
 
-  # ── Brain = xpayment-crm (standalone: webhook + admin + SQLite) ──
+  # ── Brain = xpayment-crm (webhook + admin + SQLite) ─────────────────────────
   brain:
     build:
       context: .
       dockerfile: Dockerfile
-    env_file: [.env]
+    depends_on: [chatwoot]
+    env_file: [.env] # the brain catalog (LLM_*, CHATWOOT_*, ADMIN_*, …)
     environment:
       DB_PATH: /app/data/brain.db
       MEDIA_DIR: /app/data/media
@@ -60,13 +111,10 @@ services:
     restart: unless-stopped
     stop_grace_period: 25s
 
-  # Chatwoot's account webhook must reach the brain over public HTTPS in dev.
-  tunnel:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --url http://brain:8080
-    depends_on: [brain]
-
 volumes:
   chatwoot_pg:
+  chatwoot_redis:
   evo_pg:
+  evo_redis:
+  evo_instances:
   brain_data:

@@ -5,10 +5,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -40,6 +42,17 @@ func run() error {
 	}
 	log := newLogger(cfg.LogLevel)
 	slog.SetDefault(log)
+
+	// Ensure the data directories exist (DB_PATH parent + MEDIA_DIR) so the
+	// service runs out of the box with the default ./data paths.
+	if dir := filepath.Dir(cfg.DBPath); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create db dir: %w", err)
+		}
+	}
+	if err := os.MkdirAll(cfg.Media.Dir, 0o755); err != nil {
+		return fmt.Errorf("create media dir: %w", err)
+	}
 
 	// Store + migrations.
 	store, err := sqlite.Open(cfg.DBPath)
