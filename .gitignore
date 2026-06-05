@@ -1,0 +1,12 @@
+# secrets & local state
+.env
+.env.remote
+/data/
+*.db
+*.db-shm
+*.db-wal
+
+# build artifacts
+/main
+/xpayment-crm
+/bin/

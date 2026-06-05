@@ -1,0 +1,72 @@
+# Local stack: Chatwoot + Evolution + the brain + a tunnel (docs/04 · local stack).
+# Illustrative — pin real image tags and verify upstream envs before relying on it.
+# Wiring order (docs/04): Chatwoot up → create account + agent token → Evolution up
+# + configure its Chatwoot integration → brain up → set the tunnel URL as Chatwoot's
+# account webhook → open /admin to seed persona/KB/prices.
+
+services:
+  chatwoot-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: chatwoot
+      POSTGRES_USER: chatwoot
+      POSTGRES_PASSWORD: ${CHATWOOT_DB_PASSWORD:-chatwoot}
+    volumes: [chatwoot_pg:/var/lib/postgresql/data]
+
+  chatwoot-redis:
+    image: redis:7-alpine
+
+  chatwoot:
+    image: chatwoot/chatwoot:latest # pin a real tag in prod
+    depends_on: [chatwoot-postgres, chatwoot-redis]
+    env_file: [.env]
+    ports: ["3000:3000"]
+
+  evolution-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: evolution
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${EVOLUTION_DB_PASSWORD:-evolution}
+    volumes: [evo_pg:/var/lib/postgresql/data]
+
+  evolution-redis:
+    image: redis:7-alpine
+
+  evolution:
+    image: atendai/evolution-api:latest # pin a real tag in prod
+    depends_on: [evolution-postgres, evolution-redis]
+    env_file: [.env]
+    ports: ["8081:8080"]
+
+  # ── Brain = xpayment-crm (standalone: webhook + admin + SQLite) ──
+  brain:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: [.env]
+    environment:
+      DB_PATH: /app/data/brain.db
+      MEDIA_DIR: /app/data/media
+    volumes:
+      - brain_data:/app/data
+    ports: ["8080:8080"]
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+    stop_grace_period: 25s
+
+  # Chatwoot's account webhook must reach the brain over public HTTPS in dev.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --url http://brain:8080
+    depends_on: [brain]
+
+volumes:
+  chatwoot_pg:
+  evo_pg:
+  brain_data:
