@@ -38,7 +38,8 @@ live WhatsApp/Chatwoot wiring.
 
 ## Tier 2 — full stack (Chatwoot + Evolution + brain) in Docker
 
-All three plus their datastores run on one Docker network, so Chatwoot calls the brain at
+Chatwoot and Evolution **reuse your existing Postgres/Redis** (no bundled DBs); the brain
+uses its own SQLite. The apps share one Docker network, so Chatwoot calls the brain at
 `http://brain:8080` and Evolution calls Chatwoot at `http://chatwoot:3000` — **no public
 tunnel needed**. URLs from your browser: Chatwoot `:3000`, Evolution `:8081`, brain `:8080`.
 
@@ -51,21 +52,36 @@ tunnel needed**. URLs from your browser: Chatwoot `:3000`, Evolution `:8081`, br
 ```bash
 cp .env.example .env
 # fill the brain section (LLM_API_KEY, ADMIN_PASSWORD, SESSION_SECRET, CHATWOOT_WEBHOOK_SECRET=$(openssl rand -hex 16))
-# and, for the stack, the two secrets at the bottom:
+# and, for the stack, the two secrets:
 #   SECRET_KEY_BASE=$(openssl rand -hex 64)
 #   AUTHENTICATION_API_KEY=$(openssl rand -hex 16)
 # Set the brain's view of Chatwoot to the in-network address:
 #   CHATWOOT_BASE_URL=http://chatwoot:3000
+# Fill the "Existing Postgres/Redis to REUSE" block (CHATWOOT_POSTGRES_*, CHATWOOT_REDIS_URL,
+#   EVOLUTION_DATABASE_CONNECTION_URI, EVOLUTION_CACHE_REDIS_URI) — see step 2 for the DB setup.
 # Leave CHATWOOT_ACCOUNT_ID / CHATWOOT_API_TOKEN / CHATWOOT_INBOX_ID blank for now — you fill them after step 3.
 ```
 
-### 2. Bring up Chatwoot + Evolution
+### 2. Prepare the existing Postgres, then bring up Chatwoot + Evolution
+
+**One-time setup on your existing Postgres** (Chatwoot must NOT share an app's DB — it runs
+destructive migrations). Run as a superuser; the PG must have the **pgvector** binary:
+
+```sql
+CREATE ROLE chatwoot  LOGIN PASSWORD '...';  CREATE DATABASE chatwoot  OWNER chatwoot;
+CREATE ROLE evolution LOGIN PASSWORD '...';  CREATE DATABASE evolution OWNER evolution;
+\c chatwoot
+CREATE EXTENSION IF NOT EXISTS vector;   -- Chatwoot requires pgvector
+```
+
+> **Reachability:** the containers reach the existing PG/Redis via `host.docker.internal`
+> (mapped to the docker host gateway). A service published on a host port (e.g. the local
+> `kaspi-service-db` on 54321, `kaspim-redis` on 6379) is reachable as-is. A PG bound only to
+> `127.0.0.1` must first open `listen_addresses`/`pg_hba.conf` to the gateway. Pick a free
+> Redis DB index (locally 0/1/6 are in use). Redis must be `noeviction` so Sidekiq jobs aren't dropped.
 
 ```bash
-# datastores first
-docker compose up -d chatwoot-postgres chatwoot-redis evolution-postgres evolution-redis
-
-# one-time Chatwoot DB prepare (migrations + seed)
+# one-time Chatwoot DB prepare (migrations + seed) — runs against your existing Postgres
 docker compose run --rm chatwoot bundle exec rails db:chatwoot_prepare
 
 # now the apps

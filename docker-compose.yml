@@ -1,39 +1,21 @@
-# Local full stack: Chatwoot (web + worker) + Evolution API + the brain, plus the
-# Postgres/Redis each needs. All on one Docker network, so Chatwoot reaches the
-# brain's webhook at http://brain:8080 and Evolution reaches Chatwoot at
-# http://chatwoot:3000 — NO public tunnel needed for an all-local stack.
+# Local full stack: Chatwoot (web + worker) + Evolution API + the brain.
+# Chatwoot and Evolution REUSE your existing Postgres/Redis — no bundled DBs here.
+# All connection settings come from .env (CHATWOOT_POSTGRES_*, CHATWOOT_REDIS_URL,
+# EVOLUTION_DATABASE_CONNECTION_URI, EVOLUTION_CACHE_REDIS_URI). Containers reach a
+# host-published PG/Redis via host.docker.internal (mapped to the docker host
+# gateway by extra_hosts). The brain uses its own SQLite — no PG/Redis.
 #
-# Config comes from one .env file (see .env.example). Compose interpolates
-# ${SECRET_KEY_BASE} and ${AUTHENTICATION_API_KEY} from it; the brain reads the
-# rest via env_file. Postgres passwords are dev-only literals below.
+# The apps share one Docker network, so Chatwoot reaches the brain's webhook at
+# http://brain:8080 and Evolution reaches Chatwoot at http://chatwoot:3000.
 #
-# See RUNBOOK.md for the step-by-step (first-boot DB prepare, wiring order).
-# Pin the chatwoot/evolution image tags to real releases before relying on this.
+# See RUNBOOK.md for the step-by-step (external-DB setup, first-boot db:chatwoot_prepare,
+# wiring order). Pin the chatwoot/evolution image tags to real releases before relying on this.
 
 services:
-  # ── Chatwoot (the hub) ──────────────────────────────────────────────────────
-  chatwoot-postgres:
-    image: pgvector/pgvector:pg16 # Chatwoot needs the pgvector extension
-    environment:
-      POSTGRES_DB: chatwoot
-      POSTGRES_USER: chatwoot
-      POSTGRES_PASSWORD: chatwoot # dev only
-    volumes: [chatwoot_pg:/var/lib/postgresql/data]
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "chatwoot"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  chatwoot-redis:
-    image: redis:7-alpine
-    volumes: [chatwoot_redis:/data]
-
+  # ── Chatwoot (the hub) — reuses your EXISTING Postgres/Redis (see .env) ───────
   chatwoot: # Rails web
     image: chatwoot/chatwoot:latest # PIN a real tag (e.g. v4.x) before relying on this
-    depends_on:
-      chatwoot-postgres: { condition: service_healthy }
-      chatwoot-redis: { condition: service_started }
+    extra_hosts: ["host.docker.internal:host-gateway"] # reach a host-published PG/Redis
     environment: &chatwoot_env
       INSTALLATION_ENV: docker
       RAILS_ENV: production
@@ -41,48 +23,36 @@ services:
       SECRET_KEY_BASE: "${SECRET_KEY_BASE:?set SECRET_KEY_BASE in .env via openssl rand -hex 64}"
       FRONTEND_URL: http://localhost:3000
       ENABLE_ACCOUNT_SIGNUP: "true" # lets you create the first account on first boot
-      POSTGRES_HOST: chatwoot-postgres
-      POSTGRES_USERNAME: chatwoot
-      POSTGRES_PASSWORD: chatwoot
-      POSTGRES_DATABASE: chatwoot
-      REDIS_URL: redis://chatwoot-redis:6379
+      # Connection to the existing Postgres/Redis — all from .env (no bundled DBs).
+      POSTGRES_HOST: ${CHATWOOT_POSTGRES_HOST:?set CHATWOOT_POSTGRES_HOST in .env}
+      POSTGRES_PORT: ${CHATWOOT_POSTGRES_PORT:-5432}
+      POSTGRES_USERNAME: ${CHATWOOT_POSTGRES_USERNAME:?set CHATWOOT_POSTGRES_USERNAME in .env}
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:?set CHATWOOT_POSTGRES_PASSWORD in .env}
+      POSTGRES_DATABASE: ${CHATWOOT_POSTGRES_DATABASE:-chatwoot}
+      REDIS_URL: ${CHATWOOT_REDIS_URL:?set CHATWOOT_REDIS_URL in .env}
     command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
     ports: ["3000:3000"]
     restart: unless-stopped
 
   chatwoot-sidekiq: # background worker — fires the account webhook to the brain
     image: chatwoot/chatwoot:latest # keep in lockstep with the chatwoot tag
-    depends_on:
-      chatwoot-postgres: { condition: service_healthy }
-      chatwoot-redis: { condition: service_started }
+    extra_hosts: ["host.docker.internal:host-gateway"]
     environment: *chatwoot_env
     command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
     restart: unless-stopped
 
-  # ── Evolution API (WhatsApp gateway) ─────────────────────────────────────────
-  evolution-postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: evolution
-      POSTGRES_USER: evolution
-      POSTGRES_PASSWORD: evolution # dev only
-    volumes: [evo_pg:/var/lib/postgresql/data]
-
-  evolution-redis:
-    image: redis:7-alpine
-    volumes: [evo_redis:/data]
-
+  # ── Evolution API (WhatsApp gateway) — reuses the EXISTING Postgres/Redis ─────
   evolution:
     image: atendai/evolution-api:latest # PIN a real tag (e.g. v2.x) before relying on this
-    depends_on: [evolution-postgres, evolution-redis]
+    extra_hosts: ["host.docker.internal:host-gateway"]
     environment:
       AUTHENTICATION_API_KEY: "${AUTHENTICATION_API_KEY:?set AUTHENTICATION_API_KEY in .env via openssl rand -hex 16}"
       SERVER_URL: http://localhost:8081
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: postgresql
-      DATABASE_CONNECTION_URI: postgresql://evolution:evolution@evolution-postgres:5432/evolution?schema=public
+      DATABASE_CONNECTION_URI: ${EVOLUTION_DATABASE_CONNECTION_URI:?set EVOLUTION_DATABASE_CONNECTION_URI in .env}
       CACHE_REDIS_ENABLED: "true"
-      CACHE_REDIS_URI: redis://evolution-redis:6379/6
+      CACHE_REDIS_URI: ${EVOLUTION_CACHE_REDIS_URI:?set EVOLUTION_CACHE_REDIS_URI in .env}
       CACHE_REDIS_PREFIX_KEY: evolution
       CACHE_LOCAL_ENABLED: "false"
     volumes: [evo_instances:/evolution/instances]
@@ -112,9 +82,5 @@ services:
     stop_grace_period: 25s
 
 volumes:
-  chatwoot_pg:
-  chatwoot_redis:
-  evo_pg:
-  evo_redis:
-  evo_instances:
-  brain_data:
+  evo_instances: # Evolution WhatsApp session state
+  brain_data:    # the brain's SQLite + media
