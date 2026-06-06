@@ -1,6 +1,8 @@
-// Package llm is the Drafter adapter: an OpenAI-compatible chat/completions call
-// to OpenRouter (Decision 13), forcing the emit_draft function for strict JSON
-// (docs/10 · the LLM call). Provider-neutral config — LLM_* only.
+// Package llm is the Drafter adapter: an OpenAI-compatible chat/completions call,
+// forcing the emit_draft function for strict JSON (docs/10 · the LLM call).
+// Provider-switchable (openrouter | openai | gemini) — they all speak the OpenAI
+// wire format, so only base URL / key / model change (resolved in config). Config
+// is provider-neutral: LLM_* only.
 package llm
 
 import (
@@ -17,25 +19,28 @@ import (
 	"github.com/yessaliyev/xpayment-crm/internal/usecase/assistant"
 )
 
-// Drafter calls OpenRouter. It satisfies assistant.Drafter.
+// Drafter calls the configured OpenAI-compatible provider. It satisfies assistant.Drafter.
 type Drafter struct {
-	httpc       *http.Client
-	baseURL     string
-	apiKey      string
-	model       string
-	maxTokens   int
-	temperature float64
+	httpc         *http.Client
+	baseURL       string
+	apiKey        string
+	fastModel     string // used for drafting (the Draft path)
+	thinkingModel string // stronger model, available for harder calls
+	maxTokens     int
+	temperature   float64
 }
 
-// New builds the Drafter from LLM_* config.
-func New(baseURL, apiKey, model string, maxTokens int, temperature float64) *Drafter {
+// New builds the Drafter from LLM_* config. Drafting uses fastModel; thinkingModel
+// is retained for callers that need deeper reasoning.
+func New(baseURL, apiKey, fastModel, thinkingModel string, maxTokens int, temperature float64) *Drafter {
 	return &Drafter{
-		httpc:       &http.Client{Timeout: 60 * time.Second},
-		baseURL:     strings.TrimRight(baseURL, "/"),
-		apiKey:      apiKey,
-		model:       model,
-		maxTokens:   maxTokens,
-		temperature: temperature,
+		httpc:         &http.Client{Timeout: 60 * time.Second},
+		baseURL:       strings.TrimRight(baseURL, "/"),
+		apiKey:        apiKey,
+		fastModel:     fastModel,
+		thinkingModel: thinkingModel,
+		maxTokens:     maxTokens,
+		temperature:   temperature,
 	}
 }
 
@@ -86,7 +91,7 @@ type chatResponse struct {
 // Draft issues the chat/completions call and decodes the forced tool arguments.
 func (d *Drafter) Draft(ctx context.Context, p assistant.Prompt) (domain.RawDraft, error) {
 	reqBody := chatRequest{
-		Model:       d.model,
+		Model:       d.fastModel,
 		MaxTokens:   d.maxTokens,
 		Temperature: d.temperature,
 		Messages: []message{

@@ -39,9 +39,11 @@ live WhatsApp/Chatwoot wiring.
 ## Tier 2 — full stack (Chatwoot + Evolution + brain) in Docker
 
 Chatwoot and Evolution **reuse your existing Postgres/Redis** (no bundled DBs); the brain
-uses its own SQLite. The apps share one Docker network, so Chatwoot calls the brain at
-`http://brain:8080` and Evolution calls Chatwoot at `http://chatwoot:3000` — **no public
-tunnel needed**. URLs from your browser: Chatwoot `:3000`, Evolution `:8081`, brain `:8080`.
+uses its own SQLite. Because the native Postgres listens on `127.0.0.1` only, **chatwoot and
+the brain use host networking** (`network_mode: host`) — they reach the native PG/Redis and
+each other over `localhost` (Chatwoot ↔ brain at `localhost:3000` / `localhost:8080`). No
+public tunnel needed. URLs from your browser: Chatwoot `:3000`, brain `:8080`. (Local
+Evolution is optional — production WhatsApp uses the remote Evolution.)
 
 > Pin real image tags in `docker-compose.yml` (`chatwoot/chatwoot`, `atendai/evolution-api`)
 > — `latest` can change behavior. The exact Evolution↔Chatwoot setup steps vary by version;
@@ -55,8 +57,8 @@ cp .env.example .env
 # and, for the stack, the two secrets:
 #   SECRET_KEY_BASE=$(openssl rand -hex 64)
 #   AUTHENTICATION_API_KEY=$(openssl rand -hex 16)
-# Set the brain's view of Chatwoot to the in-network address:
-#   CHATWOOT_BASE_URL=http://chatwoot:3000
+# Set the brain's view of Chatwoot (host networking -> localhost):
+#   CHATWOOT_BASE_URL=http://localhost:3000
 # Fill the "Existing Postgres/Redis to REUSE" block (CHATWOOT_POSTGRES_*, CHATWOOT_REDIS_URL,
 #   EVOLUTION_DATABASE_CONNECTION_URI, EVOLUTION_CACHE_REDIS_URI) — see step 2 for the DB setup.
 # Leave CHATWOOT_ACCOUNT_ID / CHATWOOT_API_TOKEN / CHATWOOT_INBOX_ID blank for now — you fill them after step 3.
@@ -71,7 +73,11 @@ destructive migrations). Run as a superuser; the PG must have the **pgvector** b
 CREATE ROLE chatwoot  LOGIN PASSWORD '...';  CREATE DATABASE chatwoot  OWNER chatwoot;
 CREATE ROLE evolution LOGIN PASSWORD '...';  CREATE DATABASE evolution OWNER evolution;
 \c chatwoot
-CREATE EXTENSION IF NOT EXISTS vector;   -- Chatwoot requires pgvector
+-- Pre-create as superuser: the chatwoot role is NOT a superuser, but Chatwoot's
+-- schema enables these. Pre-creating makes its enable_extension a no-op.
+CREATE EXTENSION IF NOT EXISTS vector;              -- Chatwoot requires pgvector
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
 > **Reachability:** the containers reach the existing PG/Redis via `host.docker.internal`
@@ -132,7 +138,7 @@ its numeric id in `.env` as `CHATWOOT_INBOX_ID`.
 **Settings → Integrations → Webhooks → Add** a webhook subscribed to **`message_created`**:
 
 ```
-http://brain:8080/v1/assistant/webhook/chatwoot?secret=<CHATWOOT_WEBHOOK_SECRET>
+http://localhost:8080/v1/assistant/webhook/chatwoot?secret=<CHATWOOT_WEBHOOK_SECRET>
 ```
 
 (The brain verifies the secret from this query param. Use the same value you put in `.env`.)
@@ -173,4 +179,9 @@ docker compose down -v         # wipe everything (fresh start)
   or the webhook secret not matching the `?secret=` query param.
 - **Chatwoot won't start** — ensure `SECRET_KEY_BASE` is set and you ran `db:chatwoot_prepare` once.
 - **Brain ↔ Chatwoot auth fails** — `CHATWOOT_API_TOKEN` must be a valid agent token and
-  `CHATWOOT_BASE_URL=http://chatwoot:3000` inside Docker (not `localhost`).
+  `CHATWOOT_BASE_URL=http://localhost:3000` (chatwoot + brain share the host network).
+- **Chatwoot `db:chatwoot_prepare` fails with "permission denied to create extension"** — the
+  `chatwoot` role isn't a superuser; pre-create `vector` / `pg_stat_statements` / `pg_trgm` in
+  the `chatwoot` DB as a superuser (step 2), then re-run.
+- **Chatwoot can't reach Postgres** — the native PG listens on `127.0.0.1`; chatwoot must run
+  with `network_mode: host` and `CHATWOOT_POSTGRES_HOST=127.0.0.1`.

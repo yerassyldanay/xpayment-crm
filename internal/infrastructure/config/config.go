@@ -25,11 +25,13 @@ type Config struct {
 }
 
 type LLM struct {
-	APIKey      string
-	BaseURL     string
-	Model       string
-	MaxTokens   int
-	Temperature float64
+	Provider      string // openrouter | openai | gemini (switchable)
+	APIKey        string
+	BaseURL       string // resolved from Provider; override with LLM_BASE_URL
+	FastModel     string // cheap/quick model used for drafting
+	ThinkingModel string // stronger model for harder reasoning (available to callers)
+	MaxTokens     int
+	Temperature   float64
 }
 
 type Chatwoot struct {
@@ -68,11 +70,13 @@ func Load() (Config, error) {
 		DBPath:       getEnv("DB_PATH", "./data/brain.db"),
 		MetricsToken: getEnv("METRICS_TOKEN", ""),
 		LLM: LLM{
-			APIKey:      getEnv("LLM_API_KEY", ""),
-			BaseURL:     getEnv("LLM_BASE_URL", "https://openrouter.ai/api/v1"),
-			Model:       getEnv("LLM_MODEL", "anthropic/claude-sonnet-4"),
-			MaxTokens:   getEnvInt("LLM_MAX_TOKENS", 1024),
-			Temperature: getEnvFloat("LLM_TEMPERATURE", 0.3),
+			Provider:      getEnv("LLM_PROVIDER", "openrouter"),
+			APIKey:        getEnv("LLM_API_KEY", ""),
+			BaseURL:       resolveLLMBaseURL(getEnv("LLM_PROVIDER", "openrouter"), getEnv("LLM_BASE_URL", "")),
+			FastModel:     getEnv("LLM_FAST_MODEL", "openai/gpt-4o-mini"),
+			ThinkingModel: getEnv("LLM_THINKING_MODEL", "openai/o4-mini"),
+			MaxTokens:     getEnvInt("LLM_MAX_TOKENS", 1024),
+			Temperature:   getEnvFloat("LLM_TEMPERATURE", 0.3),
 		},
 		Chatwoot: Chatwoot{
 			BaseURL:       getEnv("CHATWOOT_BASE_URL", ""),
@@ -118,6 +122,25 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))
 	}
 	return c, nil
+}
+
+// resolveLLMBaseURL maps the provider to its OpenAI-compatible chat/completions
+// base URL. LLM_BASE_URL overrides it (e.g. a proxy or self-hosted gateway).
+// All three providers speak the OpenAI wire format, so only the URL/key/model change.
+func resolveLLMBaseURL(provider, override string) string {
+	if override != "" {
+		return strings.TrimRight(override, "/")
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai":
+		return "https://api.openai.com/v1"
+	case "gemini", "google":
+		return "https://generativelanguage.googleapis.com/v1beta/openai"
+	case "openrouter", "":
+		return "https://openrouter.ai/api/v1"
+	default:
+		return "https://openrouter.ai/api/v1"
+	}
 }
 
 func getEnv(key, fallback string) string {

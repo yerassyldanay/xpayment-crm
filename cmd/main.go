@@ -78,7 +78,8 @@ func run() error {
 	}
 
 	// Adapters.
-	drafter := llm.New(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model, cfg.LLM.MaxTokens, cfg.LLM.Temperature)
+	drafter := llm.New(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.FastModel, cfg.LLM.ThinkingModel, cfg.LLM.MaxTokens, cfg.LLM.Temperature)
+	log.Info("llm configured", "provider", cfg.LLM.Provider, "base_url", cfg.LLM.BaseURL, "fast_model", cfg.LLM.FastModel, "thinking_model", cfg.LLM.ThinkingModel)
 	cw := chatwoot.New(cfg.Chatwoot.BaseURL, cfg.Chatwoot.AccountID, cfg.Chatwoot.APIToken)
 
 	// Usecases.

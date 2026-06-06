@@ -15,7 +15,9 @@ services:
   # ── Chatwoot (the hub) — reuses your EXISTING Postgres/Redis (see .env) ───────
   chatwoot: # Rails web
     image: chatwoot/chatwoot:latest # PIN a real tag (e.g. v4.x) before relying on this
-    extra_hosts: ["host.docker.internal:host-gateway"] # reach a host-published PG/Redis
+    # The existing native Postgres listens on 127.0.0.1 only, so share the host
+    # network namespace to reach it (and kaspim-redis). Binds host :3000 directly.
+    network_mode: host
     environment: &chatwoot_env
       INSTALLATION_ENV: docker
       RAILS_ENV: production
@@ -23,6 +25,10 @@ services:
       SECRET_KEY_BASE: "${SECRET_KEY_BASE:?set SECRET_KEY_BASE in .env via openssl rand -hex 64}"
       FRONTEND_URL: http://localhost:3000
       ENABLE_ACCOUNT_SIGNUP: "true" # lets you create the first account on first boot
+      # Allow webhook/channel deliveries to localhost/private IPs (brain :8080,
+      # Evolution :9700). Without this Chatwoot's ssrf_filter rejects them with
+      # "Hostname 'localhost' has no public ip addresses".
+      SAFE_FETCH_ALLOW_PRIVATE_NETWORK: "true"
       # Connection to the existing Postgres/Redis — all from .env (no bundled DBs).
       POSTGRES_HOST: ${CHATWOOT_POSTGRES_HOST:?set CHATWOOT_POSTGRES_HOST in .env}
       POSTGRES_PORT: ${CHATWOOT_POSTGRES_PORT:-5432}
@@ -31,17 +37,20 @@ services:
       POSTGRES_DATABASE: ${CHATWOOT_POSTGRES_DATABASE:-chatwoot}
       REDIS_URL: ${CHATWOOT_REDIS_URL:?set CHATWOOT_REDIS_URL in .env}
     command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
-    ports: ["3000:3000"]
     restart: unless-stopped
 
   chatwoot-sidekiq: # background worker — fires the account webhook to the brain
     image: chatwoot/chatwoot:latest # keep in lockstep with the chatwoot tag
-    extra_hosts: ["host.docker.internal:host-gateway"]
+    network_mode: host
     environment: *chatwoot_env
     command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
     restart: unless-stopped
 
   # ── Evolution API (WhatsApp gateway) — reuses the EXISTING Postgres/Redis ─────
+  # NOTE: production WhatsApp runs on the REMOTE Evolution (45.136.56.148). This
+  # local service is optional/dev. To run it against the native loopback Postgres,
+  # switch it to `network_mode: host` like chatwoot — and give it a port other than
+  # 8080 (the brain uses 8080) to avoid a clash.
   evolution:
     image: atendai/evolution-api:latest # PIN a real tag (e.g. v2.x) before relying on this
     extra_hosts: ["host.docker.internal:host-gateway"]
@@ -65,13 +74,15 @@ services:
       context: .
       dockerfile: Dockerfile
     depends_on: [chatwoot]
+    # Host networking to match chatwoot: brain reaches Chatwoot at localhost:3000
+    # and Chatwoot reaches the brain webhook at localhost:8080. Binds host :8080.
+    network_mode: host
     env_file: [.env] # the brain catalog (LLM_*, CHATWOOT_*, ADMIN_*, …)
     environment:
       DB_PATH: /app/data/brain.db
       MEDIA_DIR: /app/data/media
     volumes:
       - brain_data:/app/data
-    ports: ["8080:8080"]
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8080/health"]
       interval: 15s
