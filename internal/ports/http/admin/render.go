@@ -55,6 +55,7 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, page string, da
 	if data == nil {
 		data = map[string]any{}
 	}
+	data["Page"] = page
 	if msg := r.URL.Query().Get("ok"); msg != "" {
 		data["Flash"], data["FlashKind"] = msg, "ok"
 	}

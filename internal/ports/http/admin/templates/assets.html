@@ -1,12 +1,13 @@
 {{define "title"}}Media{{end}}
 {{define "content"}}
 <h1>Media catalog</h1>
-<p class="muted">The <code>description</code> is written <strong>for the model</strong> — it's the selection menu entry.</p>
+<p class="muted">The <code>description</code> is written <strong>for the model</strong> — it's the selection menu entry the AI reads to decide which file to attach. The customer only ever sees the file itself.</p>
 <table>
-  <thead><tr><th>Ref</th><th>Kind</th><th>Topic</th><th>URL</th><th>Active</th><th></th></tr></thead>
+  <thead><tr><th>Preview</th><th>Ref</th><th>Kind</th><th>Topic</th><th>URL</th><th>Active</th><th></th></tr></thead>
   <tbody>
   {{range .Assets}}
     <tr>
+      <td>{{if or (eq .Kind "image") (eq .Kind "gif")}}<img class="thumb" src="{{.URL}}" alt="{{.Ref}}" loading="lazy">{{else}}<span class="muted">{{.Kind}}</span>{{end}}</td>
       <td>{{.Ref}}</td><td>{{.Kind}}</td><td>{{.TopicSlug}}</td>
       <td><a href="{{.URL}}" target="_blank">{{.URL}}</a></td><td>{{if .Active}}✓{{end}}</td>
       <td>
@@ -20,18 +21,19 @@
   </tbody>
 </table>
 
-<h2>Upload a file</h2>
+<h2>Step 1 — Upload a file to get its URL</h2>
 <form method="post" action="/admin/assets/upload" enctype="multipart/form-data">
   <input type="file" name="file" required>
   <button>Upload to media dir</button>
-  <small class="muted">Copies into MEDIA_DIR and gives you a /media/... URL to paste below.</small>
+  <small class="hint">Copies the file into <code>MEDIA_DIR</code> and returns a <code>/media/…</code> URL. Copy it into the URL field below.</small>
 </form>
 
-<h2>{{if .Edit.ID}}Edit asset{{else}}Add asset{{end}}</h2>
+<h2>Step 2 — {{if .Edit.ID}}Edit asset{{else}}Describe it for the AI{{end}}</h2>
 <form method="post" action="/admin/assets">
   <input type="hidden" name="id" value="{{.Edit.ID}}">
   <div class="row">
-    <label>Ref<input name="ref" value="{{.Edit.Ref}}" required></label>
+    <label>Ref<input name="ref" value="{{.Edit.Ref}}" required>
+      <small class="hint">Stable slug the model returns — e.g. <code>tariffs_table_ru</code>.</small></label>
     <label>Kind
       <select name="kind">
         {{range .Kinds}}<option value="{{.}}" {{if eq . $.Edit.Kind}}selected{{end}}>{{.}}</option>{{end}}
@@ -42,10 +44,14 @@
       </select></label>
     <label>Active<input type="checkbox" name="active" {{if .Edit.Active}}checked{{end}}></label>
   </div>
-  <label>Topic slug<input name="topic_slug" value="{{.Edit.TopicSlug}}"></label>
-  <label>URL<input name="url" value="{{.Edit.URL}}" required></label>
-  <label>Title<input name="title" value="{{.Edit.Title}}"></label>
-  <label>Description (for the model)<textarea name="description" rows="3" required>{{.Edit.Description}}</textarea></label>
+  <label>Topic slug<input name="topic_slug" value="{{.Edit.TopicSlug}}">
+    <small class="hint">Optional — links this file to a knowledge-base topic.</small></label>
+  <label>URL<input name="url" value="{{.Edit.URL}}" required>
+    <small class="hint">The <code>/media/…</code> path from Step 1, or an external link.</small></label>
+  <label>Title<input name="title" value="{{.Edit.Title}}">
+    <small class="hint">Human-readable label for this list (not shown to customers).</small></label>
+  <label>Description (for the model)<textarea name="description" rows="3" required>{{.Edit.Description}}</textarea>
+    <small class="hint">Read by the AI to decide when to send this — say <em>what it is + when to use it</em>, in the file's language. E.g. «Инфографика тарифов. Для вопросов о ценах/выборе плана.»</small></label>
   <button class="primary">Save asset</button>
 </form>
 {{end}}

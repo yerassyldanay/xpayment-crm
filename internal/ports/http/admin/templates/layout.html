@@ -10,20 +10,31 @@
 <body>
   <header>
     <strong>🧠 xpayment brain</strong>
-    <nav>
-      <a href="/admin">Dashboard</a>
-      <a href="/admin/config">Persona</a>
-      <a href="/admin/topics">Knowledge</a>
-      <a href="/admin/assets">Media</a>
-      <a href="/admin/prices">Prices</a>
-      <a href="/admin/playground">Playground</a>
-      <a href="/admin/audit">Audit</a>
-    </nav>
+    <span class="tagline">AI sales copilot · admin console</span>
     <form method="post" action="/admin/logout" class="logout"><button>Logout</button></form>
   </header>
-  <main>
-    {{if .Flash}}<div class="flash {{.FlashKind}}">{{.Flash}}</div>{{end}}
-    {{template "content" .}}
-  </main>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="nav-group">
+        <h4>Admin</h4>
+        <a href="/admin" {{if eq $.Page "dashboard"}}class="active"{{end}}>Dashboard</a>
+        <a href="/admin/config" {{if eq $.Page "config"}}class="active"{{end}}>Persona</a>
+        <a href="/admin/topics" {{if eq $.Page "topics"}}class="active"{{end}}>Knowledge base</a>
+        <a href="/admin/assets" {{if eq $.Page "assets"}}class="active"{{end}}>Media library</a>
+        <a href="/admin/prices" {{if eq $.Page "prices"}}class="active"{{end}}>Prices &amp; tariffs</a>
+        <a href="/admin/playground" {{if eq $.Page "playground"}}class="active"{{end}}>Playground</a>
+        <a href="/admin/audit" {{if eq $.Page "audit"}}class="active"{{end}}>Audit log</a>
+      </div>
+      <div class="about">
+        <strong>About xpayment brain</strong>
+        <p>AI sales copilot for xpayment merchants. Helps your team reply faster and smarter.</p>
+        <div class="meta">Version 0.1.0 <span class="badge running">Running</span></div>
+      </div>
+    </aside>
+    <main>
+      {{if .Flash}}<div class="flash {{.FlashKind}}">{{.Flash}}</div>{{end}}
+      {{template "content" .}}
+    </main>
+  </div>
 </body>
 </html>{{end}}

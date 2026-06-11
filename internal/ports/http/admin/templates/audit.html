@@ -6,6 +6,8 @@
   <tbody>
   {{range .Audit}}
     <tr><td>{{.At}}</td><td>{{.Actor}}</td><td>{{.Action}}</td><td>{{.Detail}}</td></tr>
+  {{else}}
+    <tr><td colspan="4" class="muted">No actions logged yet.</td></tr>
   {{end}}
   </tbody>
 </table>
