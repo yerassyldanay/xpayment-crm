@@ -46,12 +46,17 @@ services:
     command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
     restart: unless-stopped
 
-  # ── Evolution API (WhatsApp gateway) — reuses the EXISTING Postgres/Redis ─────
-  # NOTE: production WhatsApp runs on the REMOTE Evolution (45.136.56.148). This
-  # local service is optional/dev. To run it against the native loopback Postgres,
-  # switch it to `network_mode: host` like chatwoot — and give it a port other than
-  # 8080 (the brain uses 8080) to avoid a clash.
+  # ── Evolution API (WhatsApp gateway) — OPT-IN, reuses the EXISTING Postgres/Redis ─
+  # NOTE: production/dev WhatsApp normally runs on a SEPARATE Evolution instance
+  # (e.g. the `evolution/` repo on host :9700, or the remote 45.136.56.148). This
+  # service is OFF by default (profile "evolution") so `docker compose up` won't
+  # start a duplicate that competes for the same WhatsApp number.
+  #   Start it only if you really want it:  docker compose --profile evolution up -d evolution
+  # If you do, point EVOLUTION_DATABASE_CONNECTION_URI / EVOLUTION_CACHE_REDIS_URI at
+  # the real services via host.docker.internal (e.g. host.docker.internal:54321 for the
+  # dockerized Postgres) — NOT 127.0.0.1, which is the container's own loopback.
   evolution:
+    profiles: ["evolution"]
     image: atendai/evolution-api:v2.2.3 # pinned — `latest` drift breaks Baileys ↔ WhatsApp ("Waiting for this message")
     extra_hosts: ["host.docker.internal:host-gateway"]
     environment:

@@ -90,10 +90,19 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 # one-time Chatwoot DB prepare (migrations + seed) — runs against your existing Postgres
 docker compose run --rm chatwoot bundle exec rails db:chatwoot_prepare
 
-# now the apps
-docker compose up -d chatwoot chatwoot-sidekiq evolution
+# now the apps (Evolution is NOT started here — see note below)
+docker compose up -d chatwoot chatwoot-sidekiq
 docker compose logs -f chatwoot   # wait for "Listening on http://0.0.0.0:3000"
 ```
+
+> **Evolution is opt-in.** This compose's `evolution` service is behind the `evolution` profile and
+> does **not** start with a plain `docker compose up` — most setups already run a separate Evolution
+> (e.g. the `evolution/` repo on host `:9700`, or a remote one) and a duplicate would compete for the
+> same WhatsApp number. Only if you want THIS one:
+> `docker compose --profile evolution up -d evolution` — and first set `EVOLUTION_DATABASE_CONNECTION_URI`
+> / `EVOLUTION_CACHE_REDIS_URI` to the real services via `host.docker.internal` (e.g.
+> `host.docker.internal:54321` for the dockerized Postgres), **not** `127.0.0.1` (the container's own
+> loopback), and create the `evolution` role + DB on that Postgres first.
 
 ### 3. Configure Chatwoot
 
@@ -108,30 +117,44 @@ docker compose logs -f chatwoot   # wait for "Listening on http://0.0.0.0:3000"
 
 ### 4. Connect WhatsApp via Evolution and bind it to Chatwoot
 
-Evolution's API is at `http://localhost:8081` (header `apikey: <AUTHENTICATION_API_KEY>`).
-Create an instance, enable its native Chatwoot integration (pointing at `http://chatwoot:3000`,
-your account id + token), then scan the QR with the WhatsApp number. Example shape (verify
-the exact fields for your Evolution version):
+Use whatever Evolution actually runs your number — e.g. the standalone stack at
+`http://localhost:9700` (header `apikey: <AUTHENTICATION_API_KEY>`). Create an instance and scan
+the QR, then enable its native Chatwoot integration. **Two networking gotchas:**
+
+- `url` must be reachable **from the Evolution container** → use `http://host.docker.internal:3000`
+  (the container has the `host-gateway` mapping), **not** `http://chatwoot:3000` (only resolves if
+  Evolution shares Chatwoot's compose network) and **not** `127.0.0.1` (the container's own loopback).
+- `nameInbox` should match the inbox the brain targets so `CHATWOOT_INBOX_ID` stays valid; with
+  `autoCreate:true` Evolution reuses an inbox of that name or creates it.
 
 ```bash
-# create an instance
-curl -s http://localhost:8081/instance/create -H "apikey: $AUTHENTICATION_API_KEY" \
+API=http://localhost:9700   # the Evolution that hosts your WhatsApp number
+
+# create + connect the instance, then scan the returned QR
+curl -s "$API/instance/create" -H "apikey: $AUTHENTICATION_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"instanceName":"xpayment","integration":"WHATSAPP-BAILEYS"}'
+curl -s "$API/instance/connect/xpayment" -H "apikey: $AUTHENTICATION_API_KEY"
 
 # enable the Chatwoot integration on that instance
-curl -s http://localhost:8081/chatwoot/set/xpayment -H "apikey: $AUTHENTICATION_API_KEY" \
+curl -s -X POST "$API/chatwoot/set/xpayment" -H "apikey: $AUTHENTICATION_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"enabled":true,"accountId":"<ACCOUNT_ID>","token":"<CHATWOOT_API_TOKEN>",
-       "url":"http://chatwoot:3000","signMsg":true,"reopenConversation":true,
-       "conversationPending":false,"importContacts":true,"importMessages":true}'
+       "url":"http://host.docker.internal:3000","signMsg":true,"reopenConversation":true,
+       "conversationPending":false,"nameInbox":"xpayment-test","autoCreate":true,
+       "importContacts":true,"importMessages":true,"daysLimitImportMessages":7}'
 
-# get the QR to scan with the WhatsApp phone
-curl -s http://localhost:8081/instance/connect/xpayment -H "apikey: $AUTHENTICATION_API_KEY"
+# confirm it took
+curl -s "$API/chatwoot/find/xpayment" -H "apikey: $AUTHENTICATION_API_KEY"   # expect enabled:true
 ```
 
-This auto-creates an **API inbox** in Chatwoot. Open **Settings → Inboxes**, find it, and put
-its numeric id in `.env` as `CHATWOOT_INBOX_ID`.
+This binds (or auto-creates) an **API inbox** in Chatwoot. Open **Settings → Inboxes**, note its
+numeric id, and set `CHATWOOT_INBOX_ID` in `.env` to match, then restart the brain
+(`docker compose up -d brain`).
+
+> Importing messages backfills history into Chatwoot, which fires `message_created` webhooks and can
+> make the brain draft on every imported message. To avoid that, `docker compose stop brain` before
+> enabling import and `docker compose up -d brain` after it settles.
 
 ### 5. Point Chatwoot's account webhook at the brain
 
