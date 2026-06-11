@@ -10,6 +10,8 @@ import (
 	"net/http"
 
 	adminuc "github.com/yessaliyev/xpayment-crm/internal/usecase/admin"
+	settingsuc "github.com/yessaliyev/xpayment-crm/internal/usecase/settings"
+	whatsappuc "github.com/yessaliyev/xpayment-crm/internal/usecase/whatsapp"
 )
 
 //go:embed templates/*.html static/*
@@ -18,6 +20,8 @@ var assets embed.FS
 // Handler renders and serves the admin UI.
 type Handler struct {
 	svc      *adminuc.Service
+	whatsapp *whatsappuc.Service
+	settings *settingsuc.Service
 	auth     *auth
 	pages    map[string]*template.Template
 	login    *template.Template
@@ -26,8 +30,8 @@ type Handler struct {
 }
 
 // New builds the admin handler and parses the embedded templates.
-func New(svc *adminuc.Service, user, password, sessionSecret, mediaDir string, log *slog.Logger) (*Handler, error) {
-	pageNames := []string{"dashboard", "config", "topics", "assets", "prices", "playground", "audit"}
+func New(svc *adminuc.Service, whatsappSvc *whatsappuc.Service, settingsSvc *settingsuc.Service, user, password, sessionSecret, mediaDir string, log *slog.Logger) (*Handler, error) {
+	pageNames := []string{"dashboard", "config", "topics", "assets", "prices", "playground", "audit", "whatsapp", "settings"}
 	pages := make(map[string]*template.Template, len(pageNames))
 	for _, name := range pageNames {
 		t, err := template.New("layout").ParseFS(assets, "templates/layout.html", "templates/"+name+".html")
@@ -42,6 +46,8 @@ func New(svc *adminuc.Service, user, password, sessionSecret, mediaDir string, l
 	}
 	return &Handler{
 		svc:      svc,
+		whatsapp: whatsappSvc,
+		settings: settingsSvc,
 		auth:     newAuth(user, password, sessionSecret),
 		pages:    pages,
 		login:    login,

@@ -7,13 +7,16 @@
   <link rel="stylesheet" href="/admin/static/app.css">
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
 </head>
-<body>
+<body {{if .Embed}}class="embed"{{end}}>
+  {{if not .Embed}}
   <header>
     <strong>🧠 xpayment brain</strong>
     <span class="tagline">AI sales copilot · admin console</span>
     <form method="post" action="/admin/logout" class="logout"><button>Logout</button></form>
   </header>
+  {{end}}
   <div class="shell">
+    {{if not .Embed}}
     <aside class="sidebar">
       <div class="nav-group">
         <h4>Admin</h4>
@@ -23,6 +26,8 @@
         <a href="/admin/assets" {{if eq $.Page "assets"}}class="active"{{end}}>Media library</a>
         <a href="/admin/prices" {{if eq $.Page "prices"}}class="active"{{end}}>Prices &amp; tariffs</a>
         <a href="/admin/playground" {{if eq $.Page "playground"}}class="active"{{end}}>Playground</a>
+        <a href="/admin/whatsapp" {{if eq $.Page "whatsapp"}}class="active"{{end}}>WhatsApp</a>
+        <a href="/admin/settings" {{if eq $.Page "settings"}}class="active"{{end}}>Settings</a>
         <a href="/admin/audit" {{if eq $.Page "audit"}}class="active"{{end}}>Audit log</a>
       </div>
       <div class="about">
@@ -31,6 +36,7 @@
         <div class="meta">Version 0.1.0 <span class="badge running">Running</span></div>
       </div>
     </aside>
+    {{end}}
     <main>
       {{if .Flash}}<div class="flash {{.FlashKind}}">{{.Flash}}</div>{{end}}
       {{template "content" .}}

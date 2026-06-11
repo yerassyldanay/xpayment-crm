@@ -1,0 +1,35 @@
+{{define "title"}}Settings{{end}}
+{{define "content"}}
+<h1>Connections</h1>
+<p class="muted">Evolution &amp; Chatwoot connection settings for the WhatsApp bridge. Saved changes apply immediately — no restart.</p>
+
+{{if .Error}}<div class="flash error">{{.Error}}</div>{{end}}
+
+<form method="post" action="/admin/settings">
+  <h2>Evolution</h2>
+  <label>API base URL
+    <input name="evolution_base_url" value="{{.Form.EvolutionBaseURL}}" placeholder="http://localhost:9700"></label>
+  <label>API key
+    <input name="evolution_api_key" type="password" autocomplete="new-password"
+      placeholder="{{if .Form.HasEvolutionKey}}•••••• (leave blank to keep){{else}}not set{{end}}"></label>
+  <label>Chatwoot URL <span class="hint">how Evolution reaches Chatwoot (container/host address)</span>
+    <input name="evolution_chatwoot_url" value="{{.Form.EvolutionChatwootURL}}" placeholder="http://host.docker.internal:3000"></label>
+  <label>Organization
+    <input name="evolution_organization" value="{{.Form.EvolutionOrganization}}" placeholder="xpayment"></label>
+  <label>Event webhook URL
+    <input name="evolution_event_webhook_url" value="{{.Form.EvolutionEventWebhookURL}}" placeholder="http://evolution-webhook:9701/evolution"></label>
+
+  <h2>Chatwoot</h2>
+  <label>API base URL
+    <input name="chatwoot_base_url" value="{{.Form.ChatwootBaseURL}}" placeholder="http://localhost:3000"></label>
+  <label>Account ID
+    <input name="chatwoot_account_id" value="{{.Form.ChatwootAccountID}}" placeholder="2"></label>
+  <label>API token
+    <input name="chatwoot_api_token" type="password" autocomplete="new-password"
+      placeholder="{{if .Form.HasChatwootToken}}•••••• (leave blank to keep){{else}}not set{{end}}"></label>
+  <label>Inbox webhook base <span class="hint">Chatwoot → Evolution callback base, instance name appended per inbox</span>
+    <input name="chatwoot_to_evolution_webhook_base" value="{{.Form.ChatwootToEvolutionWebhookBase}}" placeholder="http://localhost:9700/chatwoot/webhook"></label>
+
+  <button class="primary">Save</button>
+</form>
+{{end}}

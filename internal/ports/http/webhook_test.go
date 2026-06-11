@@ -60,7 +60,7 @@ const incomingPayload = `{"event":"message_created","id":99,"message_type":"inco
 	"content":"цена?","conversation":{"id":123,"meta":{"sender":{"id":456}}},"inbox":{"id":7}}`
 
 func newHandler(brain Brain, w Writer, d Dedup) *WebhookHandler {
-	return NewWebhookHandler(brain, w, d, 7, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return NewWebhookHandler(brain, w, d, NewManagedInboxGate(nil, []int64{7}), "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func post(h http.Handler, body string) *httptest.ResponseRecorder {
@@ -110,6 +110,16 @@ func TestWebhook_IgnoresWrongInbox(t *testing.T) {
 	post(newHandler(brain, &fakeWriter{}, &fakeDedup{}), other)
 	if brain.called {
 		t.Fatal("messages on other inboxes must be ignored")
+	}
+}
+
+func TestWebhook_AcceptsMultipleFallbackInboxes(t *testing.T) {
+	brain := &fakeBrain{}
+	h := NewWebhookHandler(brain, &fakeWriter{}, &fakeDedup{}, NewManagedInboxGate(nil, []int64{7, 99}), "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	other := strings.Replace(incomingPayload, `"inbox":{"id":7}`, `"inbox":{"id":99}`, 1)
+	post(h, other)
+	if !brain.called {
+		t.Fatal("configured fallback inbox should be accepted")
 	}
 }
 

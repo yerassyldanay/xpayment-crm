@@ -15,6 +15,7 @@ import (
 
 	"github.com/yessaliyev/xpayment-crm/internal/domain"
 	adminuc "github.com/yessaliyev/xpayment-crm/internal/usecase/admin"
+	settingsuc "github.com/yessaliyev/xpayment-crm/internal/usecase/settings"
 )
 
 // Routes returns the /admin sub-router (mounted under /admin by the main router).
@@ -47,6 +48,12 @@ func (h *Handler) Routes() http.Handler {
 	r.Post("/prices/placeholder/delete", gated(h.placeholderDelete))
 	r.Get("/playground", gated(h.playgroundForm))
 	r.Post("/playground", gated(h.playgroundRun))
+	r.Get("/whatsapp", gated(h.whatsappPage))
+	r.Post("/whatsapp/attach", gated(h.whatsappAttach))
+	r.Post("/whatsapp/detach", gated(h.whatsappDetach))
+	r.Post("/whatsapp/fix", gated(h.whatsappFix))
+	r.Get("/settings", gated(h.settingsPage))
+	r.Post("/settings", gated(h.settingsSave))
 	r.Get("/audit", gated(h.audit))
 	return r
 }
@@ -381,4 +388,109 @@ func (h *Handler) playgroundRun(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) audit(w http.ResponseWriter, r *http.Request) {
 	rows, _ := h.svc.Audit(200)
 	h.render(w, r, "audit", map[string]any{"Audit": rows})
+}
+
+// --- WhatsApp instances ---
+
+func (h *Handler) whatsappPage(w http.ResponseWriter, r *http.Request) {
+	if h.whatsapp == nil {
+		http.Error(w, "whatsapp service not configured", http.StatusServiceUnavailable)
+		return
+	}
+	instances, err := h.whatsapp.Instances(r.Context())
+	data := map[string]any{
+		"Instances": instances,
+		"Embed":     r.URL.Query().Get("embed") == "1",
+	}
+	if err != nil {
+		data["Error"] = err.Error()
+	}
+	h.render(w, r, "whatsapp", data)
+}
+
+func (h *Handler) whatsappAttach(w http.ResponseWriter, r *http.Request) {
+	if h.whatsapp == nil {
+		http.Error(w, "whatsapp service not configured", http.StatusServiceUnavailable)
+		return
+	}
+	_ = r.ParseForm()
+	redirect(w, r, whatsappReturnPath(r), "Instance attached", h.whatsapp.Attach(r.Context(), r.FormValue("instance"), h.actor(r)))
+}
+
+func (h *Handler) whatsappDetach(w http.ResponseWriter, r *http.Request) {
+	if h.whatsapp == nil {
+		http.Error(w, "whatsapp service not configured", http.StatusServiceUnavailable)
+		return
+	}
+	_ = r.ParseForm()
+	redirect(w, r, whatsappReturnPath(r), "Instance detached", h.whatsapp.Detach(r.Context(), r.FormValue("instance"), h.actor(r)))
+}
+
+func (h *Handler) whatsappFix(w http.ResponseWriter, r *http.Request) {
+	if h.whatsapp == nil {
+		http.Error(w, "whatsapp service not configured", http.StatusServiceUnavailable)
+		return
+	}
+	_ = r.ParseForm()
+	redirect(w, r, whatsappReturnPath(r), "Webhooks refreshed", h.whatsapp.FixWebhooks(r.Context(), r.FormValue("instance"), h.actor(r)))
+}
+
+func whatsappReturnPath(r *http.Request) string {
+	if r.FormValue("embed") == "1" {
+		return "/admin/whatsapp?embed=1"
+	}
+	return "/admin/whatsapp"
+}
+
+// --- settings (Evolution / Chatwoot connection) ---
+
+func (h *Handler) settingsPage(w http.ResponseWriter, r *http.Request) {
+	if h.settings == nil {
+		http.Error(w, "settings service not configured", http.StatusServiceUnavailable)
+		return
+	}
+	cur, err := h.settings.Current()
+	data := map[string]any{"Form": map[string]any{
+		"EvolutionBaseURL":               cur.EvolutionBaseURL,
+		"EvolutionChatwootURL":           cur.EvolutionChatwootURL,
+		"EvolutionOrganization":          cur.EvolutionOrganization,
+		"EvolutionEventWebhookURL":       cur.EvolutionEventWebhookURL,
+		"ChatwootBaseURL":                cur.ChatwootBaseURL,
+		"ChatwootAccountID":              cur.ChatwootAccountID,
+		"ChatwootToEvolutionWebhookBase": cur.ChatwootToEvolutionWebhookBase,
+		"HasEvolutionKey":                cur.EvolutionAPIKey != "",
+		"HasChatwootToken":               cur.ChatwootAPIToken != "",
+	}}
+	if err != nil {
+		data["Error"] = err.Error()
+	}
+	h.render(w, r, "settings", data)
+}
+
+func (h *Handler) settingsSave(w http.ResponseWriter, r *http.Request) {
+	if h.settings == nil {
+		http.Error(w, "settings service not configured", http.StatusServiceUnavailable)
+		return
+	}
+	_ = r.ParseForm()
+	// Start from the current values so blank secret fields keep the stored secret.
+	cur, _ := h.settings.Current()
+	b := settingsuc.Bridge{
+		EvolutionBaseURL:               r.FormValue("evolution_base_url"),
+		EvolutionAPIKey:                r.FormValue("evolution_api_key"),
+		EvolutionChatwootURL:           r.FormValue("evolution_chatwoot_url"),
+		EvolutionOrganization:          r.FormValue("evolution_organization"),
+		EvolutionEventWebhookURL:       r.FormValue("evolution_event_webhook_url"),
+		ChatwootBaseURL:                r.FormValue("chatwoot_base_url"),
+		ChatwootAccountID:              r.FormValue("chatwoot_account_id"),
+		ChatwootAPIToken:               r.FormValue("chatwoot_api_token"),
+		ChatwootToEvolutionWebhookBase: r.FormValue("chatwoot_to_evolution_webhook_base"),
+	}
+	if strings.TrimSpace(b.EvolutionAPIKey) == "" {
+		b.EvolutionAPIKey = cur.EvolutionAPIKey
+	}
+	if strings.TrimSpace(b.ChatwootAPIToken) == "" {
+		b.ChatwootAPIToken = cur.ChatwootAPIToken
+	}
+	redirect(w, r, "/admin/settings", "Settings saved", h.settings.Save(b, h.actor(r)))
 }

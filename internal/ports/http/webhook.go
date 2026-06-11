@@ -31,21 +31,62 @@ type Dedup interface {
 	MarkProcessed(messageID string) (ok bool, err error)
 }
 
+type InboxGate interface {
+	AllowsInbox(ctx context.Context, inboxID int64) (bool, error)
+}
+
+type ManagedInboxStore interface {
+	AIEnabledInboxIDs() ([]int64, error)
+}
+
+type ManagedInboxGate struct {
+	store    ManagedInboxStore
+	fallback map[int64]bool
+}
+
+func NewManagedInboxGate(store ManagedInboxStore, fallbackIDs []int64) *ManagedInboxGate {
+	fallback := make(map[int64]bool, len(fallbackIDs))
+	for _, id := range fallbackIDs {
+		if id > 0 {
+			fallback[id] = true
+		}
+	}
+	return &ManagedInboxGate{store: store, fallback: fallback}
+}
+
+func (g *ManagedInboxGate) AllowsInbox(_ context.Context, inboxID int64) (bool, error) {
+	if g.store != nil {
+		ids, err := g.store.AIEnabledInboxIDs()
+		if err != nil {
+			return false, err
+		}
+		if len(ids) > 0 {
+			for _, id := range ids {
+				if id == inboxID {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
+	}
+	return g.fallback[inboxID], nil
+}
+
 // WebhookHandler receives Chatwoot account-webhook events.
 type WebhookHandler struct {
 	brain   Brain
 	writer  Writer
 	dedup   Dedup
-	inboxID int64
+	inboxes InboxGate
 	secret  string
 	log     *slog.Logger
 	locks   *keyedMutex
 }
 
-func NewWebhookHandler(brain Brain, writer Writer, dedup Dedup, inboxID int64, secret string, log *slog.Logger) *WebhookHandler {
+func NewWebhookHandler(brain Brain, writer Writer, dedup Dedup, inboxes InboxGate, secret string, log *slog.Logger) *WebhookHandler {
 	return &WebhookHandler{
 		brain: brain, writer: writer, dedup: dedup,
-		inboxID: inboxID, secret: secret, log: log, locks: newKeyedMutex(),
+		inboxes: inboxes, secret: secret, log: log, locks: newKeyedMutex(),
 	}
 }
 
@@ -83,7 +124,13 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.shouldProcess(ev) {
+	ok, err := h.shouldProcess(r.Context(), ev)
+	if err != nil {
+		h.log.Error("inbox gate failed", "inbox_id", ev.Inbox.ID, "err", err)
+		writeOK(w)
+		return
+	}
+	if !ok {
 		writeOK(w)
 		return
 	}
@@ -103,11 +150,16 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeOK(w)
 }
 
-func (h *WebhookHandler) shouldProcess(ev chatwootEvent) bool {
-	return ev.Event == "message_created" &&
+func (h *WebhookHandler) shouldProcess(ctx context.Context, ev chatwootEvent) (bool, error) {
+	if !(ev.Event == "message_created" &&
 		ev.MessageType == "incoming" &&
-		!ev.Private &&
-		ev.Inbox.ID == h.inboxID
+		!ev.Private) {
+		return false, nil
+	}
+	if h.inboxes == nil {
+		return true, nil
+	}
+	return h.inboxes.AllowsInbox(ctx, ev.Inbox.ID)
 }
 
 func (h *WebhookHandler) process(ctx context.Context, ev chatwootEvent) {

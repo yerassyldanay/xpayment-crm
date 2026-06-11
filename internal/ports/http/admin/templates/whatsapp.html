@@ -1,0 +1,58 @@
+{{define "title"}}WhatsApp{{end}}
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1>WhatsApp</h1>
+    <p class="muted">Evolution ↔ Chatwoot bridge. Attach an instance to create its inbox and turn on AI drafts.</p>
+  </div>
+  <a class="button" href="/admin/whatsapp{{if .Embed}}?embed=1{{end}}">Refresh</a>
+</div>
+
+{{if .Error}}<div class="flash error">{{.Error}}</div>{{end}}
+
+<table class="ops-table">
+  <thead>
+    <tr><th>Instance</th><th>Connection</th><th>Bridge / AI</th><th>Actions</th></tr>
+  </thead>
+  <tbody>
+  {{range .Instances}}
+    <tr>
+      <td>
+        <strong>{{.Instance.Name}}</strong>
+        {{if .Inbox}}<small class="muted block">inbox #{{.Inbox.ID}} {{.Inbox.Name}}</small>{{end}}
+        {{if and .Managed (ne .Status "detached") .Warnings}}<small class="block warn-note">⚠ {{range $i, $w := .Warnings}}{{if $i}}; {{end}}{{$w}}{{end}}</small>{{end}}
+      </td>
+      <td><span class="badge {{if eq .Instance.ConnectionState "open"}}running{{else}}attention{{end}}">{{if .Instance.ConnectionState}}{{.Instance.ConnectionState}}{{else}}unknown{{end}}</span></td>
+      <td>
+        {{if eq .Status "ready"}}<span class="badge running">Ready · AI on</span>
+        {{else if eq .Status "detached"}}<span class="badge">Off</span>
+        {{else if .Managed}}<span class="badge attention">Needs attention</span>
+        {{else}}<span class="badge">Not attached</span>{{end}}
+      </td>
+      <td class="actions">
+        {{if and .Managed (ne .Status "detached")}}
+          <form method="post" action="/admin/whatsapp/fix">
+            <input type="hidden" name="instance" value="{{.Instance.Name}}">
+            {{if $.Embed}}<input type="hidden" name="embed" value="1">{{end}}
+            <button>Fix</button>
+          </form>
+          <form method="post" action="/admin/whatsapp/detach" onsubmit="return confirm('Disable Chatwoot bridge for {{.Instance.Name}}? WhatsApp stays logged in.');">
+            <input type="hidden" name="instance" value="{{.Instance.Name}}">
+            {{if $.Embed}}<input type="hidden" name="embed" value="1">{{end}}
+            <button class="link">Detach</button>
+          </form>
+        {{else}}
+          <form method="post" action="/admin/whatsapp/attach">
+            <input type="hidden" name="instance" value="{{.Instance.Name}}">
+            {{if $.Embed}}<input type="hidden" name="embed" value="1">{{end}}
+            <button class="primary">Attach</button>
+          </form>
+        {{end}}
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="4" class="muted">No Evolution instances found.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

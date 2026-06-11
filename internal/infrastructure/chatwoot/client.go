@@ -15,15 +15,18 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yessaliyev/xpayment-crm/internal/domain"
+	"github.com/yessaliyev/xpayment-crm/internal/usecase/whatsapp"
 )
 
 // Client implements assistant.ChatwootReader and assistant.ChatwootWriter.
 type Client struct {
 	httpc      *http.Client
-	base       string // {CHATWOOT_BASE_URL}/api/v1/accounts/{account_id}
+	mu         sync.RWMutex // guards base/token so the Settings page can reconfigure live
+	base       string       // {CHATWOOT_BASE_URL}/api/v1/accounts/{account_id}
 	token      string
 	mediaDir   string // local dir backing /media/* URLs, for attaching files
 	windowSize int
@@ -34,14 +37,34 @@ type Client struct {
 func New(baseURL, accountID, token, mediaDir string) *Client {
 	return &Client{
 		httpc:      &http.Client{Timeout: 30 * time.Second},
-		base:       fmt.Sprintf("%s/api/v1/accounts/%s", baseURL, accountID),
+		base:       accountBase(baseURL, accountID),
 		token:      token,
 		mediaDir:   mediaDir,
 		windowSize: 15,
 	}
 }
 
+func accountBase(baseURL, accountID string) string {
+	return fmt.Sprintf("%s/api/v1/accounts/%s", strings.TrimRight(baseURL, "/"), accountID)
+}
+
+// Configure swaps the connection settings in place so saved Settings apply
+// without restarting the process.
+func (c *Client) Configure(baseURL, accountID, token string) {
+	c.mu.Lock()
+	c.base = accountBase(baseURL, accountID)
+	c.token = token
+	c.mu.Unlock()
+}
+
+func (c *Client) endpoint() (base, token string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.base, c.token
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
+	base, token := c.endpoint()
 	var rdr io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -50,11 +73,11 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		}
 		rdr = bytes.NewReader(buf)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rdr)
+	req, err := http.NewRequestWithContext(ctx, method, base+path, rdr)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("api_access_token", c.token)
+	req.Header.Set("api_access_token", token)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -189,11 +212,12 @@ func (c *Client) postMultipart(ctx context.Context, apiPath, content string, fil
 	if err := mw.Close(); err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+apiPath, &buf)
+	base, token := c.endpoint()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+apiPath, &buf)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("api_access_token", c.token)
+	req.Header.Set("api_access_token", token)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	resp, err := c.httpc.Do(req)
 	if err != nil {
@@ -266,4 +290,71 @@ func (c *Client) SendOutgoing(ctx context.Context, chatID domain.ChatID, text st
 	path := fmt.Sprintf("/conversations/%d/messages", chatID.ConversationID)
 	body := map[string]any{"content": text, "message_type": "outgoing", "private": false}
 	return c.do(ctx, http.MethodPost, path, body, nil)
+}
+
+// --- WhatsApp provisioning helpers ---
+
+type inboxesResp struct {
+	Payload []struct {
+		ID          int64  `json:"id"`
+		Name        string `json:"name"`
+		ChannelType string `json:"channel_type"`
+		WebhookURL  string `json:"webhook_url"`
+		Channel     struct {
+			WebhookURL string `json:"webhook_url"`
+		} `json:"channel"`
+	} `json:"payload"`
+}
+
+func (c *Client) ListInboxes(ctx context.Context) ([]whatsapp.Inbox, error) {
+	var resp inboxesResp
+	if err := c.do(ctx, http.MethodGet, "/inboxes", nil, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]whatsapp.Inbox, 0, len(resp.Payload))
+	for _, in := range resp.Payload {
+		webhookURL := in.WebhookURL
+		if webhookURL == "" {
+			webhookURL = in.Channel.WebhookURL
+		}
+		out = append(out, whatsapp.Inbox{
+			ID: in.ID, Name: in.Name, ChannelType: in.ChannelType, WebhookURL: webhookURL,
+		})
+	}
+	return out, nil
+}
+
+func (c *Client) UpdateInboxWebhook(ctx context.Context, inboxID int64, webhookURL string) error {
+	body := map[string]any{"channel": map[string]any{"webhook_url": webhookURL}}
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("/inboxes/%d", inboxID), body, nil)
+}
+
+type accountWebhooksResp struct {
+	Payload struct {
+		Webhooks []struct {
+			ID            int64    `json:"id"`
+			URL           string   `json:"url"`
+			Subscriptions []string `json:"subscriptions"`
+		} `json:"webhooks"`
+	} `json:"payload"`
+}
+
+func (c *Client) ListAccountWebhooks(ctx context.Context) ([]whatsapp.AccountWebhook, error) {
+	var resp accountWebhooksResp
+	if err := c.do(ctx, http.MethodGet, "/webhooks", nil, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]whatsapp.AccountWebhook, 0, len(resp.Payload.Webhooks))
+	for _, h := range resp.Payload.Webhooks {
+		out = append(out, whatsapp.AccountWebhook{ID: h.ID, URL: h.URL, Subscriptions: h.Subscriptions})
+	}
+	return out, nil
+}
+
+func (c *Client) CreateAccountWebhook(ctx context.Context, url string, subscriptions []string) error {
+	body := map[string]any{"url": url, "subscriptions": subscriptions}
+	if err := c.do(ctx, http.MethodPost, "/webhooks", body, nil); err == nil {
+		return nil
+	}
+	return c.do(ctx, http.MethodPost, "/webhooks", map[string]any{"webhook": body}, nil)
 }

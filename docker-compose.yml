@@ -36,6 +36,8 @@ services:
       POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:?set CHATWOOT_POSTGRES_PASSWORD in .env}
       POSTGRES_DATABASE: ${CHATWOOT_POSTGRES_DATABASE:-chatwoot}
       REDIS_URL: ${CHATWOOT_REDIS_URL:?set CHATWOOT_REDIS_URL in .env}
+    volumes:
+      - chatwoot_storage:/app/storage
     command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
     restart: unless-stopped
 
@@ -43,6 +45,8 @@ services:
     image: chatwoot/chatwoot:latest # keep in lockstep with the chatwoot tag
     network_mode: host
     environment: *chatwoot_env
+    volumes:
+      - chatwoot_storage:/app/storage
     command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
     restart: unless-stopped
 
@@ -98,5 +102,6 @@ services:
     stop_grace_period: 25s
 
 volumes:
+  chatwoot_storage: # Chatwoot ActiveStorage files shared by web + Sidekiq
   evo_instances: # Evolution WhatsApp session state
   brain_data:    # the brain's SQLite + media
