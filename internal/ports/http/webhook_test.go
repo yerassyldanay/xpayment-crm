@@ -95,6 +95,24 @@ func TestWebhook_ProcessesIncomingAndWrites(t *testing.T) {
 	}
 }
 
+func TestWebhook_WarnsOnLidSender(t *testing.T) {
+	// A "<digits>@lid" sender (hidden WhatsApp id) gets the delivery warning appended.
+	lid := strings.Replace(incomingPayload, `"sender":{"id":456}`, `"sender":{"id":456,"identifier":"5231387607239@lid"}`, 1)
+	w := &fakeWriter{}
+	post(newHandler(&fakeBrain{draft: domain.Draft{ReplyText: "ответ"}}, w, &fakeDedup{}), lid)
+	if len(w.notes) != 1 || !strings.Contains(w.notes[0], lidReplyWarning) {
+		t.Fatalf("expected LID warning in note, got %v", w.notes)
+	}
+
+	// A normal @s.whatsapp.net sender must NOT get the warning.
+	pn := strings.Replace(incomingPayload, `"sender":{"id":456}`, `"sender":{"id":456,"identifier":"77051234567@s.whatsapp.net"}`, 1)
+	w2 := &fakeWriter{}
+	post(newHandler(&fakeBrain{draft: domain.Draft{ReplyText: "ответ"}}, w2, &fakeDedup{}), pn)
+	if len(w2.notes) != 1 || strings.Contains(w2.notes[0], lidReplyWarning) {
+		t.Fatalf("normal contact should not get LID warning, got %v", w2.notes)
+	}
+}
+
 func TestWebhook_IgnoresOutgoing(t *testing.T) {
 	brain := &fakeBrain{}
 	out := strings.Replace(incomingPayload, `"message_type":"incoming"`, `"message_type":"outgoing"`, 1)

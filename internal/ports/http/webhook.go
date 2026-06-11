@@ -101,7 +101,8 @@ type chatwootEvent struct {
 		ID   int64 `json:"id"`
 		Meta struct {
 			Sender struct {
-				ID int64 `json:"id"`
+				ID         int64  `json:"id"`
+				Identifier string `json:"identifier"` // WhatsApp JID; "<digits>@lid" = no real number
 			} `json:"sender"`
 		} `json:"meta"`
 	} `json:"conversation"`
@@ -184,12 +185,19 @@ func (h *WebhookHandler) process(ctx context.Context, ev chatwootEvent) {
 		return
 	}
 
-	h.write(ctx, chatID, draft)
+	// A "<digits>@lid" sender has no real WhatsApp number, so any reply will fail
+	// to deliver until the contact is saved on the linked phone — warn the agent.
+	lid := strings.HasSuffix(ev.Conversation.Meta.Sender.Identifier, "@lid")
+	h.write(ctx, chatID, draft, lid)
 }
 
 // write performs the Chatwoot side effects (suggest-only v1).
-func (h *WebhookHandler) write(ctx context.Context, chatID domain.ChatID, d domain.Draft) {
-	if err := h.writer.PostPrivateNote(ctx, chatID, renderNote(d), d.Media); err != nil {
+func (h *WebhookHandler) write(ctx context.Context, chatID domain.ChatID, d domain.Draft, lid bool) {
+	note := renderNote(d)
+	if lid {
+		note += "\n\n" + lidReplyWarning
+	}
+	if err := h.writer.PostPrivateNote(ctx, chatID, note, d.Media); err != nil {
 		h.log.Error("post private note failed", "chat", chatID.ConversationID, "err", err)
 	}
 	if d.Escalate {
@@ -206,6 +214,11 @@ func (h *WebhookHandler) write(ctx context.Context, chatID domain.ChatID, d doma
 		}
 	}
 }
+
+// lidReplyWarning is appended to the draft note when the customer reached us via a
+// WhatsApp LID (hidden id): replies won't deliver until their number is saved on the
+// linked business phone, so the agent should know before pressing Send.
+const lidReplyWarning = "⚠️ Контакт написал через скрытый WhatsApp-ID (LID) — ответ не доставится, пока его номер не сохранён в контактах рабочего телефона."
 
 // renderNote builds the private-note body a human reads before sending.
 func renderNote(d domain.Draft) string {
