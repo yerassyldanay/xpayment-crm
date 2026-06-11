@@ -24,12 +24,14 @@ func (f *fakeBrain) HandleMessage(context.Context, domain.ChatID, domain.Message
 
 type fakeWriter struct {
 	notes  []string
+	media  [][]domain.ResolvedAsset
 	attrs  map[string]any
 	labels []string
 }
 
-func (w *fakeWriter) PostPrivateNote(_ context.Context, _ domain.ChatID, text string) error {
+func (w *fakeWriter) PostPrivateNote(_ context.Context, _ domain.ChatID, text string, media []domain.ResolvedAsset) error {
 	w.notes = append(w.notes, text)
+	w.media = append(w.media, media)
 	return nil
 }
 func (w *fakeWriter) MergeContactAttributes(_ context.Context, _ domain.ChatID, a map[string]any) error {

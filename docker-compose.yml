@@ -52,7 +52,7 @@ services:
   # switch it to `network_mode: host` like chatwoot — and give it a port other than
   # 8080 (the brain uses 8080) to avoid a clash.
   evolution:
-    image: atendai/evolution-api:latest # PIN a real tag (e.g. v2.x) before relying on this
+    image: atendai/evolution-api:v2.2.3 # pinned — `latest` drift breaks Baileys ↔ WhatsApp ("Waiting for this message")
     extra_hosts: ["host.docker.internal:host-gateway"]
     environment:
       AUTHENTICATION_API_KEY: "${AUTHENTICATION_API_KEY:?set AUTHENTICATION_API_KEY in .env via openssl rand -hex 16}"

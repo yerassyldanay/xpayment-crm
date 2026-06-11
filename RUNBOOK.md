@@ -185,3 +185,35 @@ docker compose down -v         # wipe everything (fresh start)
   the `chatwoot` DB as a superuser (step 2), then re-run.
 - **Chatwoot can't reach Postgres** — the native PG listens on `127.0.0.1`; chatwoot must run
   with `network_mode: host` and `CHATWOOT_POSTGRES_HOST=127.0.0.1`.
+
+### WhatsApp shows "Waiting for this message"
+
+This is a WhatsApp end-to-end-encryption / Baileys **session-decryption** failure inside Evolution —
+**not** the brain (the brain only posts private-note drafts; it never sends to WhatsApp). The usual
+cause is a drifted `atendai/evolution-api:latest` whose bundled Baileys no longer matches WhatsApp's
+current web protocol.
+
+> ⚠️ The Evolution that actually serves the linked WhatsApp number runs from the **separate
+> `evolution/` repo** (container `evolution-api`, host port **9700**). The version pin below is also
+> applied there for a real fix; `docker-compose.yml` here pins the optional Tier-2 `evolution` service
+> (port 8081). Run the API calls against whichever Evolution your number is linked to.
+
+Fix:
+
+1. **Pin / upgrade the image** to a current stable tag (done here: `atendai/evolution-api:v2.2.3`),
+   then pull and recreate:
+   ```bash
+   docker compose pull evolution && docker compose up -d evolution
+   ```
+2. **Re-link the instance** (resets the stale session keys). Against the running Evolution
+   (`API=http://localhost:9700` for the separate stack, or `:8081` for this compose;
+   `KEY=$AUTHENTICATION_API_KEY`):
+   ```bash
+   curl -X DELETE "$API/instance/logout/xpayment" -H "apikey: $KEY"
+   curl -X DELETE "$API/instance/delete/xpayment" -H "apikey: $KEY"
+   # recreate + re-enable the Chatwoot integration (see step 4 above), then:
+   curl -s "$API/instance/connect/xpayment" -H "apikey: $KEY"   # scan the returned QR
+   ```
+3. **Keep the phone online** — Baileys is a linked device and needs the phone reachable to sync keys.
+4. **Fallback** if auto-detect keeps failing: set `CONFIG_SESSION_PHONE_VERSION` to a current
+   WhatsApp Web version, and `LOG_BAILEYS=debug` to inspect decryption errors in the Evolution logs.

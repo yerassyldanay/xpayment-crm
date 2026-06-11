@@ -22,7 +22,7 @@ type ChatwootReader interface {
 
 // ChatwootWriter writes results back to Chatwoot.
 type ChatwootWriter interface {
-	PostPrivateNote(ctx context.Context, chatID domain.ChatID, text string) error
+	PostPrivateNote(ctx context.Context, chatID domain.ChatID, text string, media []domain.ResolvedAsset) error
 	MergeContactAttributes(ctx context.Context, chatID domain.ChatID, attrs map[string]any) error
 	SetLabels(ctx context.Context, chatID domain.ChatID, labels []string) error
 	SendOutgoing(ctx context.Context, chatID domain.ChatID, text string, media []domain.ResolvedAsset) error // Phase 3

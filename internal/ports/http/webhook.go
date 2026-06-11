@@ -21,7 +21,7 @@ type Brain interface {
 
 // Writer is the subset of ChatwootWriter the webhook needs.
 type Writer interface {
-	PostPrivateNote(ctx context.Context, chatID domain.ChatID, text string) error
+	PostPrivateNote(ctx context.Context, chatID domain.ChatID, text string, media []domain.ResolvedAsset) error
 	MergeContactAttributes(ctx context.Context, chatID domain.ChatID, attrs map[string]any) error
 	SetLabels(ctx context.Context, chatID domain.ChatID, labels []string) error
 }
@@ -128,7 +128,7 @@ func (h *WebhookHandler) process(ctx context.Context, ev chatwootEvent) {
 			return
 		}
 		h.log.Error("HandleMessage failed; posting escalation note", "chat", chatID.ConversationID, "err", err)
-		_ = h.writer.PostPrivateNote(ctx, chatID, "⚠️ Ассистент не смог подготовить черновик. Ответьте, пожалуйста, вручную.")
+		_ = h.writer.PostPrivateNote(ctx, chatID, "⚠️ Ассистент не смог подготовить черновик. Ответьте, пожалуйста, вручную.", nil)
 		return
 	}
 
@@ -137,7 +137,7 @@ func (h *WebhookHandler) process(ctx context.Context, ev chatwootEvent) {
 
 // write performs the Chatwoot side effects (suggest-only v1).
 func (h *WebhookHandler) write(ctx context.Context, chatID domain.ChatID, d domain.Draft) {
-	if err := h.writer.PostPrivateNote(ctx, chatID, renderNote(d)); err != nil {
+	if err := h.writer.PostPrivateNote(ctx, chatID, renderNote(d), d.Media); err != nil {
 		h.log.Error("post private note failed", "chat", chatID.ConversationID, "err", err)
 	}
 	if d.Escalate {
@@ -168,8 +168,12 @@ func renderNote(d domain.Draft) string {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "🤖 Черновик (confidence %.2f):\n\n%s", d.Confidence, d.ReplyText)
-	for _, m := range d.Media {
-		fmt.Fprintf(&b, "\n📎 %s — %s", m.Ref, m.URL)
+	if len(d.Media) > 0 {
+		b.WriteString("\n")
+		for _, m := range d.Media {
+			fmt.Fprintf(&b, "\n📎 %s (%s)", m.Ref, m.Kind)
+		}
+		b.WriteString("\n(файлы прикреплены ниже)")
 	}
 	if d.SuggestedCallback != nil && d.SuggestedCallback.Note != "" {
 		fmt.Fprintf(&b, "\n\n⏰ Напоминание: %s (%s)", d.SuggestedCallback.Note, d.SuggestedCallback.DueAt)

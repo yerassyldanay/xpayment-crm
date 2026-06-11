@@ -8,8 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yessaliyev/xpayment-crm/internal/domain"
@@ -20,15 +25,18 @@ type Client struct {
 	httpc      *http.Client
 	base       string // {CHATWOOT_BASE_URL}/api/v1/accounts/{account_id}
 	token      string
+	mediaDir   string // local dir backing /media/* URLs, for attaching files
 	windowSize int
 }
 
-// New builds the client. windowSize caps the messages read (~15).
-func New(baseURL, accountID, token string) *Client {
+// New builds the client. windowSize caps the messages read (~15). mediaDir is the
+// local directory that backs /media/* asset URLs, used to attach files to notes.
+func New(baseURL, accountID, token, mediaDir string) *Client {
 	return &Client{
-		httpc:      &http.Client{Timeout: 20 * time.Second},
+		httpc:      &http.Client{Timeout: 30 * time.Second},
 		base:       fmt.Sprintf("%s/api/v1/accounts/%s", baseURL, accountID),
 		token:      token,
+		mediaDir:   mediaDir,
 		windowSize: 15,
 	}
 }
@@ -134,10 +142,69 @@ func (c *Client) Profile(ctx context.Context, chatID domain.ChatID) (map[string]
 // --- ChatwootWriter ---
 
 // PostPrivateNote posts the draft as an internal note Evolution never forwards.
-func (c *Client) PostPrivateNote(ctx context.Context, chatID domain.ChatID, text string) error {
-	path := fmt.Sprintf("/conversations/%d/messages", chatID.ConversationID)
-	body := map[string]any{"content": text, "message_type": "outgoing", "private": true}
-	return c.do(ctx, http.MethodPost, path, body, nil)
+// Local media (URLs under /media/) are uploaded as real attachments so the agent
+// sees inline previews and can forward them; external URLs are appended as links.
+func (c *Client) PostPrivateNote(ctx context.Context, chatID domain.ChatID, text string, media []domain.ResolvedAsset) error {
+	apiPath := fmt.Sprintf("/conversations/%d/messages", chatID.ConversationID)
+
+	var files []string
+	for _, m := range media {
+		if strings.HasPrefix(m.URL, "/media/") && c.mediaDir != "" {
+			files = append(files, filepath.Join(c.mediaDir, filepath.FromSlash(path.Base(m.URL))))
+		} else if m.URL != "" {
+			text += "\n" + m.URL // external link — can't attach a local file
+		}
+	}
+
+	if len(files) == 0 {
+		body := map[string]any{"content": text, "message_type": "outgoing", "private": true}
+		return c.do(ctx, http.MethodPost, apiPath, body, nil)
+	}
+	return c.postMultipart(ctx, apiPath, text, files)
+}
+
+// postMultipart creates a private note with file attachments (multipart/form-data).
+func (c *Client) postMultipart(ctx context.Context, apiPath, content string, files []string) error {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("content", content)
+	_ = mw.WriteField("message_type", "outgoing")
+	_ = mw.WriteField("private", "true")
+	for _, fp := range files {
+		f, err := os.Open(fp)
+		if err != nil {
+			return fmt.Errorf("open attachment %s: %w", fp, err)
+		}
+		part, err := mw.CreateFormFile("attachments[]", filepath.Base(fp))
+		if err != nil {
+			f.Close()
+			return err
+		}
+		if _, err := io.Copy(part, f); err != nil {
+			f.Close()
+			return err
+		}
+		f.Close()
+	}
+	if err := mw.Close(); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+apiPath, &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("api_access_token", c.token)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := c.httpc.Do(req)
+	if err != nil {
+		return fmt.Errorf("chatwoot POST %s (multipart): %w", apiPath, err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("chatwoot POST %s (multipart): http %d: %s", apiPath, resp.StatusCode, string(data))
+	}
+	return nil
 }
 
 // MergeContactAttributes is a read-modify-write: GET current attrs, additively
