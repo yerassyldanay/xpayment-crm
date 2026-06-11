@@ -45,7 +45,11 @@ func BuildSystem(s *domain.Snapshot) string {
 
 	b.WriteString("\n\nKNOWLEDGE BASE:\n")
 	for _, t := range s.Topics {
-		fmt.Fprintf(&b, "\n# topic: %s (%s)\n%s\n", t.Slug, t.Language, t.BodyMD)
+		fmt.Fprintf(&b, "\n# topic: %s (%s)\n", t.Slug, t.Language)
+		if t.Keywords != "" {
+			fmt.Fprintf(&b, "keywords: %s\n", t.Keywords)
+		}
+		fmt.Fprintf(&b, "%s\n", t.BodyMD)
 	}
 
 	b.WriteString("\nMEDIA CATALOG:\n")

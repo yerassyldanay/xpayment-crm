@@ -23,9 +23,10 @@
 
 <h2>Step 1 — Upload a file to get its URL</h2>
 <form method="post" action="/admin/assets/upload" enctype="multipart/form-data">
+  <input type="hidden" name="topic_slug" value="{{.Edit.TopicSlug}}">
   <input type="file" name="file" required>
   <button>Upload to media dir</button>
-  <small class="hint">Copies the file into <code>MEDIA_DIR</code> and returns a <code>/media/…</code> URL. Copy it into the URL field below.</small>
+  <small class="hint">Copies the file into <code>MEDIA_DIR</code> and brings you back here with the URL, ref and kind prefilled. Tip: prefix in-KB files with <code>kb_</code>.</small>
 </form>
 
 <h2>Step 2 — {{if .Edit.ID}}Edit asset{{else}}Describe it for the AI{{end}}</h2>

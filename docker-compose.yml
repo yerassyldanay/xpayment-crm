@@ -80,7 +80,7 @@ services:
     env_file: [.env] # the brain catalog (LLM_*, CHATWOOT_*, ADMIN_*, …)
     environment:
       DB_PATH: /app/data/brain.db
-      MEDIA_DIR: /app/data/media
+      MEDIA_DIR: /app/media
     volumes:
       - brain_data:/app/data
     healthcheck:

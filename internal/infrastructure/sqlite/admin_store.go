@@ -161,7 +161,7 @@ func (s *Store) RollbackTo(version int, actor string) error {
 // --- knowledge base ---
 
 func (s *Store) Topics() ([]admin.TopicRow, error) {
-	rows, err := s.db.Query(`SELECT id, slug, language, title, summary, body_md, active
+	rows, err := s.db.Query(`SELECT id, slug, language, title, summary, body_md, keywords, active
 		FROM kb_topics ORDER BY slug, language`)
 	if err != nil {
 		return nil, err
@@ -171,7 +171,7 @@ func (s *Store) Topics() ([]admin.TopicRow, error) {
 	for rows.Next() {
 		var t admin.TopicRow
 		var active int
-		if err := rows.Scan(&t.ID, &t.Slug, &t.Language, &t.Title, &t.Summary, &t.BodyMD, &active); err != nil {
+		if err := rows.Scan(&t.ID, &t.Slug, &t.Language, &t.Title, &t.Summary, &t.BodyMD, &t.Keywords, &active); err != nil {
 			return nil, err
 		}
 		t.Active = active == 1
@@ -183,16 +183,16 @@ func (s *Store) Topics() ([]admin.TopicRow, error) {
 func (s *Store) SaveTopic(t admin.TopicRow, actor string) error {
 	var err error
 	if t.ID > 0 {
-		_, err = s.db.Exec(`UPDATE kb_topics SET slug=?, language=?, title=?, summary=?, body_md=?, active=?,
+		_, err = s.db.Exec(`UPDATE kb_topics SET slug=?, language=?, title=?, summary=?, body_md=?, keywords=?, active=?,
 			updated_at=datetime('now') WHERE id=?`,
-			t.Slug, t.Language, t.Title, t.Summary, t.BodyMD, boolToInt(t.Active), t.ID)
+			t.Slug, t.Language, t.Title, t.Summary, t.BodyMD, t.Keywords, boolToInt(t.Active), t.ID)
 	} else {
-		_, err = s.db.Exec(`INSERT INTO kb_topics (slug, language, title, summary, body_md, active)
-			VALUES (?,?,?,?,?,?)
+		_, err = s.db.Exec(`INSERT INTO kb_topics (slug, language, title, summary, body_md, keywords, active)
+			VALUES (?,?,?,?,?,?,?)
 			ON CONFLICT(slug, language) DO UPDATE SET
 				title=excluded.title, summary=excluded.summary, body_md=excluded.body_md,
-				active=excluded.active, updated_at=datetime('now')`,
-			t.Slug, t.Language, t.Title, t.Summary, t.BodyMD, boolToInt(t.Active))
+				keywords=excluded.keywords, active=excluded.active, updated_at=datetime('now')`,
+			t.Slug, t.Language, t.Title, t.Summary, t.BodyMD, t.Keywords, boolToInt(t.Active))
 	}
 	if err != nil {
 		return err

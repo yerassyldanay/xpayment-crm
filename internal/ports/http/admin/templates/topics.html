@@ -31,7 +31,29 @@
   </div>
   <label>Title<input name="title" value="{{.Edit.Title}}" required></label>
   <label>Summary (helps the model pick the topic)<input name="summary" value="{{.Edit.Summary}}"></label>
+  <label>Keywords (comma-separated)<input name="keywords" value="{{.Edit.Keywords}}" placeholder="тариф, цена, сколько стоит">
+    <small class="hint">Shown to the AI to help it match this topic to a customer's question.</small></label>
   <label>Body (markdown, tokens intact)<textarea name="body_md" rows="8" required>{{.Edit.BodyMD}}</textarea></label>
   <button class="primary">Save topic</button>
 </form>
+
+{{if .Edit.Slug}}
+<h2>Media for this topic</h2>
+{{if .TopicAssets}}
+<table>
+  <thead><tr><th>Preview</th><th>Ref</th><th>Description (for the model)</th><th></th></tr></thead>
+  <tbody>
+  {{range .TopicAssets}}
+    <tr>
+      <td>{{if or (eq .Kind "image") (eq .Kind "gif")}}<img class="thumb" src="{{.URL}}" alt="{{.Ref}}" loading="lazy">{{else}}<span class="muted">{{.Kind}}</span>{{end}}</td>
+      <td>{{.Ref}}{{if not .Active}} <span class="muted">(inactive)</span>{{end}}</td>
+      <td class="muted">{{.Description}}</td>
+      <td><a href="/admin/assets?edit={{.ID}}">edit</a></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p class="muted">No media attached to this topic yet.</p>{{end}}
+<p><a href="/admin/assets?topic_slug={{.Edit.Slug}}">+ Add / upload media for «{{.Edit.Slug}}»</a></p>
+{{end}}
 {{end}}

@@ -5,6 +5,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -41,10 +42,17 @@ func (s *Store) Close() error { return s.db.Close() }
 // DB exposes the handle for adapters that need it (e.g. dedup).
 func (s *Store) DB() *sql.DB { return s.db }
 
-// migrate applies every embedded *.sql file in lexical order. Files are written
-// idempotently (CREATE TABLE IF NOT EXISTS / INSERT … WHERE NOT EXISTS), so
-// re-running on an existing DB is safe without a versions table.
+// migrate applies every embedded *.sql file in lexical order, each exactly once,
+// tracking applied files in schema_migrations. Early files stay idempotent
+// (CREATE TABLE IF NOT EXISTS / INSERT … WHERE NOT EXISTS), but the ledger lets
+// later migrations use one-shot statements like ALTER TABLE … ADD COLUMN safely.
 func (s *Store) migrate() error {
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		name       TEXT PRIMARY KEY,
+		applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`); err != nil {
+		return fmt.Errorf("ensure schema_migrations: %w", err)
+	}
 	entries, err := fs.ReadDir(migrations.FS, ".")
 	if err != nil {
 		return fmt.Errorf("read migrations: %w", err)
@@ -57,12 +65,23 @@ func (s *Store) migrate() error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
+		var seen string
+		err := s.db.QueryRow(`SELECT name FROM schema_migrations WHERE name=?`, name).Scan(&seen)
+		if err == nil {
+			continue // already applied
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("check migration %s: %w", name, err)
+		}
 		b, err := fs.ReadFile(migrations.FS, name)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", name, err)
 		}
 		if _, err := s.db.Exec(string(b)); err != nil {
 			return fmt.Errorf("apply %s: %w", name, err)
+		}
+		if _, err := s.db.Exec(`INSERT INTO schema_migrations (name) VALUES (?)`, name); err != nil {
+			return fmt.Errorf("record migration %s: %w", name, err)
 		}
 	}
 	return nil

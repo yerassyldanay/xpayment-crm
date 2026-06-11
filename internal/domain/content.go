@@ -26,6 +26,7 @@ type Topic struct {
 	Title    string
 	Summary  string
 	BodyMD   string
+	Keywords string // comma-separated; shown to the model to aid topic/media selection
 }
 
 // Asset is one kb_assets row — the LLM-facing menu entry the model selects on.

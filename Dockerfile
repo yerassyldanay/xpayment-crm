@@ -14,6 +14,7 @@ RUN adduser -S -u 1001 appuser
 ENV TZ=Asia/Almaty
 WORKDIR /app
 COPY --from=build /app/main ./main
+COPY --from=build /app/media ./media
 RUN mkdir -p /app/data && chown appuser /app/data
 EXPOSE 8080
 USER appuser

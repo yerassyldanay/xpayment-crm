@@ -118,7 +118,7 @@ func (s *Store) priceBook() (domain.PriceBook, error) {
 }
 
 func (s *Store) activeTopics() ([]domain.Topic, error) {
-	rows, err := s.db.Query(`SELECT slug, language, title, summary, body_md
+	rows, err := s.db.Query(`SELECT slug, language, title, summary, body_md, keywords
 		FROM kb_topics WHERE active=1 ORDER BY slug, language`)
 	if err != nil {
 		return nil, fmt.Errorf("topics: %w", err)
@@ -127,7 +127,7 @@ func (s *Store) activeTopics() ([]domain.Topic, error) {
 	var out []domain.Topic
 	for rows.Next() {
 		var t domain.Topic
-		if err := rows.Scan(&t.Slug, &t.Language, &t.Title, &t.Summary, &t.BodyMD); err != nil {
+		if err := rows.Scan(&t.Slug, &t.Language, &t.Title, &t.Summary, &t.BodyMD, &t.Keywords); err != nil {
 			return nil, err
 		}
 		out = append(out, t)

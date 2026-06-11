@@ -35,6 +35,7 @@ type TopicRow struct {
 	Title    string
 	Summary  string
 	BodyMD   string
+	Keywords string
 	Active   bool
 }
 

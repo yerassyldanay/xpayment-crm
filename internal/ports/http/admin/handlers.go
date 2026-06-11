@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -154,7 +155,17 @@ func (h *Handler) topics(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	h.render(w, r, "topics", map[string]any{"Topics": topics, "Edit": edit})
+	// Media owned by the topic being edited (linked by topic_slug).
+	var media []adminuc.AssetRow
+	if edit.Slug != "" {
+		all, _ := h.svc.Assets()
+		for _, a := range all {
+			if a.TopicSlug == edit.Slug {
+				media = append(media, a)
+			}
+		}
+	}
+	h.render(w, r, "topics", map[string]any{"Topics": topics, "Edit": edit, "TopicAssets": media})
 }
 
 func (h *Handler) topicSave(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +174,8 @@ func (h *Handler) topicSave(w http.ResponseWriter, r *http.Request) {
 	err := h.svc.SaveTopic(adminuc.TopicRow{
 		ID: id, Slug: r.FormValue("slug"), Language: r.FormValue("language"),
 		Title: r.FormValue("title"), Summary: r.FormValue("summary"),
-		BodyMD: r.FormValue("body_md"), Active: r.FormValue("active") != "",
+		BodyMD: r.FormValue("body_md"), Keywords: r.FormValue("keywords"),
+		Active: r.FormValue("active") != "",
 	}, h.actor(r))
 	redirect(w, r, "/admin/topics", "Topic saved", err)
 }
@@ -178,12 +190,27 @@ func (h *Handler) topicDelete(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) assetsPage(w http.ResponseWriter, r *http.Request) {
 	list, _ := h.svc.Assets()
 	edit := adminuc.AssetRow{Language: "any", Kind: "image", Active: true}
-	if id := r.URL.Query().Get("edit"); id != "" {
+	q := r.URL.Query()
+	if id := q.Get("edit"); id != "" {
 		for _, a := range list {
 			if strconv.FormatInt(a.ID, 10) == id {
 				edit = a
 				break
 			}
+		}
+	} else {
+		// Prefill the form from the upload step or the "add media for topic" link.
+		if v := q.Get("url"); v != "" {
+			edit.URL = v
+		}
+		if v := q.Get("ref"); v != "" {
+			edit.Ref = v
+		}
+		if v := q.Get("kind"); v != "" {
+			edit.Kind = v
+		}
+		if v := q.Get("topic_slug"); v != "" {
+			edit.TopicSlug = v
 		}
 	}
 	h.render(w, r, "assets", map[string]any{
@@ -236,7 +263,50 @@ func (h *Handler) assetUpload(w http.ResponseWriter, r *http.Request) {
 		redirect(w, r, "/admin/assets", "", err)
 		return
 	}
-	redirect(w, r, "/admin/assets", "Uploaded — URL: /media/"+name, nil)
+	// Redirect into a prefilled "describe it" form: URL + suggested ref/kind,
+	// carrying the topic the upload was started from.
+	q := url.Values{}
+	q.Set("url", "/media/"+name)
+	q.Set("ref", suggestRef(name))
+	q.Set("kind", kindFromExt(name))
+	if ts := r.FormValue("topic_slug"); ts != "" {
+		q.Set("topic_slug", ts)
+	}
+	q.Set("ok", "Uploaded — review the details below and save")
+	http.Redirect(w, r, "/admin/assets?"+q.Encode(), http.StatusSeeOther)
+}
+
+// suggestRef turns a filename into a stable slug (drop extension + kb_ prefix,
+// lower-case, non-alphanumerics → underscore).
+func suggestRef(name string) string {
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	base = strings.TrimPrefix(strings.ToLower(base), "kb_")
+	var b strings.Builder
+	for _, c := range base {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+			b.WriteRune(c)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+// kindFromExt guesses the asset kind from the file extension.
+func kindFromExt(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".png", ".jpg", ".jpeg", ".webp":
+		return "image"
+	case ".gif":
+		return "gif"
+	case ".mp4", ".mov", ".webm", ".m4v":
+		return "video"
+	case ".pdf", ".doc", ".docx":
+		return "document"
+	default:
+		return "link"
+	}
 }
 
 // --- prices ---

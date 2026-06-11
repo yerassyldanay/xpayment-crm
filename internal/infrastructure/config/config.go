@@ -91,7 +91,7 @@ func Load() (Config, error) {
 			SessionSecret: getEnv("SESSION_SECRET", ""),
 		},
 		Media: Media{
-			Dir:     getEnv("MEDIA_DIR", "./data/media"),
+			Dir:     getEnv("MEDIA_DIR", "./media"),
 			BaseURL: getEnv("MEDIA_BASE_URL", ""),
 		},
 		OTel: OTel{
