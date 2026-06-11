@@ -240,3 +240,50 @@ Fix:
 3. **Keep the phone online** — Baileys is a linked device and needs the phone reachable to sync keys.
 4. **Fallback** if auto-detect keeps failing: set `CONFIG_SESSION_PHONE_VERSION` to a current
    WhatsApp Web version, and `LOG_BAILEYS=debug` to inspect decryption errors in the Evolution logs.
+
+### Agent replies in Chatwoot don't reach WhatsApp (outbound)
+
+Inbound works but pressing **Send** in Chatwoot doesn't deliver to WhatsApp. Outbound flows
+Chatwoot → the **inbox's `webhook_url`** → Evolution → Baileys. The webhook path segment must equal
+the **Evolution instance name**, or Evolution drops it ("instance not found").
+
+- Inspect/fix the inbox webhook:
+  ```bash
+  TOK=$CHATWOOT_API_TOKEN
+  curl -s -H "api_access_token: $TOK" http://localhost:3000/api/v1/accounts/2/inboxes/1   # check webhook_url
+  curl -s -X PATCH http://localhost:3000/api/v1/accounts/2/inboxes/1 \
+    -H "api_access_token: $TOK" -H 'Content-Type: application/json' \
+    -d '{"channel":{"webhook_url":"http://localhost:9700/chatwoot/webhook/<INSTANCE_NAME>"}}'
+  ```
+  (This mismatch happens when `nameInbox` ≠ the instance name. To prevent it on a fresh setup, set
+  `nameInbox` equal to the instance name in `/chatwoot/set`.)
+- Confirm with `docker logs -f evolution-api` while sending: you should see the outbound send, not
+  an instance-not-found / logout error.
+
+### Reply fails: "the contact is not a valid Whatsapp number" (`@lid`)
+
+The send now reaches Evolution but is rejected because the contact's WhatsApp identifier is a
+**LID** (`<digits>@lid`, e.g. `5540591734861@lid`) instead of a real phone JID
+(`<phone>@s.whatsapp.net`). A LID is WhatsApp's hidden/linked id — **not a dialable number** — so
+Evolution can only send if it holds a **LID → phone mapping**, which it builds while the instance
+**fully syncs contacts/app-state**.
+
+- **Verify scope:** reply to a contact with a real `@s.whatsapp.net` JID (e.g. `77058686509`) — it
+  should deliver. If only `@lid` contacts fail, this is the issue.
+- **Fix:** re-link the instance and let it finish syncing on a stable session (see "Waiting for this
+  message" above for the logout→delete→recreate→connect steps); keep the phone online. A completed
+  sync (no `init queries` timeout / `failed to sync state` in the logs) populates the LID→phone
+  mappings, after which previously-`@lid` contacts you've chatted with become sendable.
+- **Avoid bulk history import** — `importMessages:true` backfills many LID-only contacts (from
+  historical/group chats) that often have no phone mapping and can't be replied to. Prefer live 1:1
+  inbound. Some LIDs (privacy-hidden / community senders) may never resolve to a number.
+
+### Outbound media (images) don't reach WhatsApp, but text does
+
+Evolution sends an attachment by downloading it from Chatwoot's `data_url`, which is built from
+Chatwoot's **`FRONTEND_URL`**. With `FRONTEND_URL=http://localhost:3000`, that URL points at the
+Evolution container itself (its own loopback), so the download fails — text sends, media doesn't.
+Set `FRONTEND_URL` to a host the **Evolution container can reach and you can still open in a
+browser** — i.e. the host's **LAN IP** (`http://<LAN_IP>:3000`) — then
+`docker compose up -d chatwoot chatwoot-sidekiq`. (`host.docker.internal` works for the container but
+not for a browser on Linux.)
